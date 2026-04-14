@@ -15,6 +15,41 @@ function getCats(custom = []) { return [...DEFAULT_CATEGORIES, ...custom.filter(
 window.__CUSTOM_CATS__ = [];
 function allCats() { return getCats(window.__CUSTOM_CATS__ || []); }
 const ICONS = ["🛒","🏥","👶","🐾","🎓","💪","✈️","🎁","☕","📱","💇","🔧","🏋️","🎵","📚","👗","🧹","💊","🚌","🍔","🎬","💡","🏖️","🛍️"];
+
+// ── Smart Categorization ──
+const KEYWORD_MAP = {
+  housing: ["rent", "mortgage", "hoa", "property", "lease", "apartment", "housing", "landlord", "realtor"],
+  food: ["grocery", "groceries", "walmart", "costco", "kroger", "aldi", "trader joe", "whole foods", "safeway", "publix", "heb", "food", "restaurant", "dining", "doordash", "uber eats", "grubhub", "chipotle", "mcdonald", "starbucks", "coffee", "pizza", "chick-fil-a", "wendy", "taco bell", "panera", "subway", "lunch", "dinner", "breakfast"],
+  transport: ["gas", "shell", "exxon", "chevron", "bp", "fuel", "uber", "lyft", "parking", "toll", "car wash", "auto", "mechanic", "oil change", "tire", "car payment", "car insurance", "vehicle", "transit", "metro", "bus pass"],
+  utilities: ["electric", "electricity", "power", "water", "gas bill", "internet", "wifi", "phone bill", "cell phone", "verizon", "att", "t-mobile", "sprint", "comcast", "xfinity", "duke energy", "utility", "sewer", "trash", "waste"],
+  entertainment: ["netflix", "hulu", "disney", "spotify", "apple music", "youtube", "hbo", "amazon prime", "movie", "theater", "concert", "game", "steam", "playstation", "xbox", "nintendo", "subscription", "fun", "entertainment", "bowling", "arcade", "bar", "drinks"],
+  savings: ["savings", "invest", "investment", "401k", "ira", "roth", "stock", "crypto", "emergency fund", "transfer to savings", "deposit"],
+  income: ["paycheck", "salary", "direct deposit", "wage", "bonus", "freelance", "commission", "refund", "reimbursement", "dividend", "interest", "income", "side hustle", "payment received"],
+};
+
+function guessCategory(label, entries = []) {
+  if (!label) return null;
+  const lower = label.toLowerCase().trim();
+
+  // First check user's past categorizations for this exact label
+  const pastMatch = entries.find(e => e.label && e.label.toLowerCase().trim() === lower && e.category && e.category !== "other");
+  if (pastMatch) return pastMatch.category;
+
+  // Then check keyword partial matches from history (e.g. user always puts "Target" as food)
+  const pastPartial = entries.find(e => e.label && e.category && e.category !== "other" && (
+    lower.includes(e.label.toLowerCase().trim()) || e.label.toLowerCase().trim().includes(lower)
+  ) && lower.length > 2);
+  if (pastPartial) return pastPartial.category;
+
+  // Finally check the built-in keyword map
+  for (const [catId, keywords] of Object.entries(KEYWORD_MAP)) {
+    for (const kw of keywords) {
+      if (lower.includes(kw) || kw.includes(lower)) return catId;
+    }
+  }
+
+  return null;
+}
 const PALETTE = ["#6366f1","#3b82f6","#22c55e","#f59e0b","#ef4444","#ec4899","#8b5cf6","#06b6d4","#14b8a6","#f97316","#a855f7","#64748b"];
 const FREQ = [{ id: "weekly", label: "Weekly", days: 7 },{ id: "biweekly", label: "Bi-weekly", days: 14 },{ id: "semimonthly", label: "Semi-monthly", days: 15 },{ id: "monthly", label: "Monthly", days: 30 },{ id: "yearly", label: "Yearly", days: 365 }];
 
@@ -494,7 +529,7 @@ function CategoryManager({ customCategories = [], onAdd, onRemove }) {
 }
 
 // ── Entry Row ──
-function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle }) {
+function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle, allEntries }) {
   const cat = allCats().find(c => c.id === entry.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const isInc = entry.type === "income";
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
   const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
@@ -502,14 +537,25 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
   const onTM = e => { const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -160)); e.preventDefault(); } else if (Math.abs(dx) > Math.abs(dy) && dx > 0 && swipeX < 0) { setSwiping(true); setSwipeX(Math.min(swipeX + dx, 0)); e.preventDefault(); } };
   const onTE = () => { if (swipeX < -60) { setSwipeX(-160); } else { setSwipeX(0); } setSwiping(false); };
   useEffect(() => { if (isEditing) setTimeout(() => { lRef.current?.focus(); rRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100); }, [isEditing]);
-  const commit = () => { const label = lRef.current?.value?.trim(), amount = parseFloat(aRef.current?.value), dateISO = dRef.current?.value; if (!label && (!amount || amount === 0)) { onRemove(entry.id); } else { const u = { label: label || "(untitled)", amount: amount || 0 }; if (dateISO) { u.dateISO = dateISO; u.date = fmtDate(dateISO); } onUpdate(entry.id, u); } haptic(); onStopEdit(); };
+
+  const autoCategory = () => {
+    if (isInc || (entry.category && entry.category !== "other")) return;
+    const label = lRef.current?.value?.trim();
+    if (!label) return;
+    const guess = guessCategory(label, allEntries || []);
+    if (guess && guess !== "income" && guess !== "other") {
+      onUpdate(entry.id, { category: guess });
+    }
+  };
+
+  const commit = () => { const label = lRef.current?.value?.trim(), amount = parseFloat(aRef.current?.value), dateISO = dRef.current?.value; if (!label && (!amount || amount === 0)) { onRemove(entry.id); } else { const u = { label: label || "(untitled)", amount: amount || 0 }; if (dateISO) { u.dateISO = dateISO; u.date = fmtDate(dateISO); } autoCategory(); onUpdate(entry.id, u); } haptic(); onStopEdit(); };
   const kd = e => { if (e.key === "Enter") { if (e.target === lRef.current && aRef.current) aRef.current.focus(); else commit(); } if (e.key === "Escape") { if (!entry.label && entry.amount === 0) onRemove(entry.id); else onStopEdit(); } };
 
   if (isEditing) return (
     <div ref={rRef} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", background: T().inputBg, borderRadius: 10, borderLeft: `3px solid ${cat.color}`, animation: "slideIn 0.2s ease" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontSize: 18, width: 28, textAlign: "center", color: isInc ? "#22c55e" : cat.color }}>{isInc ? "↑" : cat.icon}</span>
-        <input ref={lRef} defaultValue={entry.label} placeholder={isInc ? "e.g. Salary" : "e.g. Groceries"} onKeyDown={kd} style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "4px 2px", color: T().text, fontSize: 14, outline: "none" }} />
+        <input ref={lRef} defaultValue={entry.label} placeholder={isInc ? "e.g. Salary" : "e.g. Groceries"} onKeyDown={kd} onBlur={autoCategory} style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "4px 2px", color: T().text, fontSize: 14, outline: "none" }} />
         <div style={{ position: "relative", width: 90 }}><span style={{ position: "absolute", left: 4, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span><input ref={aRef} defaultValue={entry.amount||""} placeholder="0.00" inputMode="decimal" onKeyDown={kd} style={{ width: "100%", boxSizing: "border-box", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "4px 2px 4px 16px", color: isInc ? T().inc : T().text, fontSize: 14, fontFamily: T().mono, outline: "none", textAlign: "right" }} /></div>
         <button onClick={commit} style={{ background: isInc ? "#22c55e" : "#6366f1", border: "none", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", color: isInc ? "#0a0a1a" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>✓</button>
       </div>
@@ -692,13 +738,13 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</div>
             {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
               <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
-                <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} />
+                <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
               )} />
             )}
-            <BottomBar>
+            {!editingId && <BottomBar>
               <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
               <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
-            </BottomBar>
+            </BottomBar>}
           </>
         )}
       </div>
@@ -715,7 +761,9 @@ export default function App({ user, householdId }) {
   const [navStack, setNavStack] = useState([]);
   const [addingRoot, setAddingRoot] = useState(false);
   const [showArchivedRoot, setShowArchivedRoot] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [themeId, setThemeId] = useState(() => { try { return localStorage.getItem("maverick-theme") || "midnight"; } catch { return "midnight"; } });
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => typeof Notification !== "undefined" && Notification.permission === "granted");
   const t = THEMES[themeId] || THEMES.midnight;
   window.__THEME__ = themeId;
   const toggleTheme = () => { const next = themeId === "midnight" ? "ocean" : "midnight"; setThemeId(next); try { localStorage.setItem("maverick-theme", next); } catch {} window.__THEME__ = next; };
@@ -723,9 +771,6 @@ export default function App({ user, householdId }) {
   const par = navStack.length >= 2 ? d.nodes.find(n => n.id === navStack[navStack.length - 2]) : null;
   const goTo = nid => setNavStack([...navStack, nid]);
   const goBack = () => setNavStack(navStack.slice(0, -1));
-
-  const [showHouseholdCode, setShowHouseholdCode] = useState(false);
-  const handleSignOut = () => { if (confirm("Sign out?")) signOut(auth); };
 
   const shell = ch => (
     <div className="app-shell" style={{ fontFamily: t.font, background: t.bg, color: t.text, minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", overflow: "hidden" }}>
@@ -757,11 +802,64 @@ export default function App({ user, householdId }) {
             <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: "-0.02em", background: t.titleGrad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
             <span style={{ fontSize: 10, color: t.textDim, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
           </div>
-          <button onClick={toggleTheme} title={`Switch to ${themeId === "midnight" ? "Ocean Depth" : "Midnight Indigo"}`}
-            style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.textSub, display: "flex", alignItems: "center", gap: 4 }}>
-            {themeId === "midnight" ? "🌊" : "🌙"} {themeId === "midnight" ? "Ocean" : "Midnight"}
-          </button>
+          <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? `${t.accent}20` : t.surface, border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10, width: 36, height: 36, cursor: "pointer", fontSize: 18, color: showSettings ? t.accentLight : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>⚙</button>
         </div>
+        {showSettings && (
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14, padding: "16px 18px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
+            <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Settings</div>
+            
+            {/* Theme */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>{themeId === "midnight" ? "🌙" : "🌊"}</span>
+                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Theme</div><div style={{ fontSize: 10, color: t.textMuted }}>{t.name}</div></div>
+              </div>
+              <button onClick={toggleTheme} style={{ background: `${t.accent}20`, border: `1px solid ${t.accent}30`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.accentLight }}>
+                Switch to {themeId === "midnight" ? "Ocean" : "Midnight"}
+              </button>
+            </div>
+
+            {/* Notifications */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 16 }}>🔔</span>
+                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Notifications</div><div style={{ fontSize: 10, color: t.textMuted }}>{notificationsEnabled ? "Enabled" : "Disabled"}</div></div>
+              </div>
+              <button onClick={async () => {
+                if (typeof Notification === "undefined") return;
+                if (Notification.permission === "granted") {
+                  setNotificationsEnabled(!notificationsEnabled);
+                } else {
+                  const perm = await Notification.requestPermission();
+                  setNotificationsEnabled(perm === "granted");
+                }
+              }} style={{
+                width: 44, height: 26, borderRadius: 13, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
+                background: notificationsEnabled ? t.inc : "rgba(255,255,255,0.1)",
+              }}>
+                <div style={{
+                  width: 20, height: 20, borderRadius: 10, background: "#fff", position: "absolute", top: 3, transition: "left 0.2s",
+                  left: notificationsEnabled ? 21 : 3,
+                }} />
+              </button>
+            </div>
+
+            {/* Household code */}
+            <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 16 }}>👥</span>
+                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Household</div><div style={{ fontSize: 10, color: t.textMuted }}>Invite your partner</div></div>
+              </div>
+              <div style={{ background: `${t.accent}10`, borderRadius: 8, padding: "8px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 18, fontWeight: 700, fontFamily: T().mono, color: t.text, letterSpacing: "0.12em" }}>{householdId}</span>
+                <span style={{ fontSize: 10, color: t.textMuted }}>{user?.email}</span>
+              </div>
+            </div>
+
+            {/* Sign out */}
+            <button onClick={() => { if (confirm("Sign out?")) signOut(auth); }} style={{ marginTop: 12, width: "100%", padding: "10px 0", borderRadius: 8, border: `1px solid rgba(239,68,68,0.2)`, background: "rgba(239,68,68,0.06)", color: "#ef4444", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Sign Out</button>
+          </div>
+        )}
         <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Folders ({roots.length})</div>
         <div style={{ paddingBottom: 100 }}>
           <DraggableList items={stats} onReorder={ids => app.reorderNodes(null, ids)} renderItem={(f, _i, onDragHandle) => (
