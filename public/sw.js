@@ -1,5 +1,5 @@
-const CACHE_NAME = 'maverick-v1';
-const PRECACHE = ['/', '/index.html'];
+const CACHE_NAME = 'maverick-v2';
+const PRECACHE = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(PRECACHE)));
