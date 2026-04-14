@@ -340,8 +340,8 @@ function YearInReview({ entries }) {
     <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}>
       <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>{year} Summary</div>
       <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
-        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Income</div><div style={{ fontSize: 14, fontWeight: 600, color: T().inc, fontFamily: T().mono, monospace" }}>+{fmt(totalInc)}</div></div>
-        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Spent</div><div style={{ fontSize: 14, fontWeight: 600, color: T().exp, fontFamily: T().mono, monospace" }}>−{fmt(totalExp)}</div></div>
+        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Income</div><div style={{ fontSize: 14, fontWeight: 600, color: T().inc, fontFamily: T().mono }}>+{fmt(totalInc)}</div></div>
+        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Spent</div><div style={{ fontSize: 14, fontWeight: 600, color: T().exp, fontFamily: T().mono }}>−{fmt(totalExp)}</div></div>
         <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Avg/mo</div><div style={{ fontSize: 14, fontWeight: 600, color: T().textSub, fontFamily: T().mono }}>{fmt(avgMonth)}</div></div>
       </div>
       {topCats.length > 0 && (
@@ -567,8 +567,8 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
               <div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 4 }}>Balance</div>
               <div style={{ fontSize: 26, fontWeight: 700, fontFamily: T().mono, color: balance >= 0 ? T().inc : T().exp, letterSpacing: "-0.02em" }}><AnimNum value={balance} /></div>
               <div style={{ display: "flex", gap: 24, marginTop: 8 }}>
-                <div><div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Income</div><div style={{ fontSize: 14, fontWeight: 600, color: T().inc, fontFamily: T().mono, monospace", marginTop: 2 }}>+{fmt(inc)}</div></div>
-                <div><div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Expenses</div><div style={{ fontSize: 14, fontWeight: 600, color: T().exp, fontFamily: T().mono, monospace", marginTop: 2 }}>−{fmt(exp)}</div></div>
+                <div><div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Income</div><div style={{ fontSize: 14, fontWeight: 600, color: T().inc, fontFamily: T().mono, marginTop: 2 }}>+{fmt(inc)}</div></div>
+                <div><div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Expenses</div><div style={{ fontSize: 14, fontWeight: 600, color: T().exp, fontFamily: T().mono, marginTop: 2 }}>−{fmt(exp)}</div></div>
               </div>
             </div>
             <BudgetAlerts nodeId={node.id} entries={entries} limits={limits} />
