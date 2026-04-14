@@ -1,20 +1,23 @@
 # Maverick Budget
 
-A clean, minimal budget tracker inspired by [Fudget](https://fudget.com). Organize your finances with nested folders, track income and expenses with inline editing, and set budget limits with smart alerts.
+A clean, minimal budget tracker inspired by [Fudget](https://fudget.com). Installable as a PWA with offline support.
 
 ## Features
 
-- **Nested Folders** — unlimited depth: Folders → Budgets → Sub-budgets → etc.
-- **Inline Editing** — tap any transaction to edit it in place, Fudget-style
-- **Swipe to Delete** — swipe left on mobile to remove transactions
-- **Running Balance** — cumulative balance shown on every transaction row
-- **Recurring Transactions** — weekly, bi-weekly, monthly, or yearly auto-entries
-- **Budget Limits** — per-category spending limits with progress bars
-- **Smart Alerts** — warnings at 80% spend, red alerts when over budget
+- **Nested Folders** — unlimited depth: Folders → Budgets → Sub-budgets
+- **Inline Editing** — tap any transaction to edit in place
+- **Date Picker** — choose the actual date for each entry
+- **Swipe to Delete** — swipe left on mobile to remove
+- **Running Balance** — cumulative balance on every row
+- **Recurring Transactions** — weekly, bi-weekly, monthly, yearly auto-entries
+- **Budget Limits** — per-category limits with progress bars and alerts
 - **Search & Filter** — find transactions by label or category
-- **Rename on Tap** — tap any folder or budget title to rename inline
-- **Donut Chart** — visual spending breakdown by category
-- **Dark Theme** — mobile-first design
+- **CSV Export/Import** — download or upload transactions
+- **Color Picker** — choose custom colors for folders and budgets
+- **Drag to Reorder** — rearrange folders and budgets
+- **Rename on Tap** — tap any title to rename inline
+- **Donut Chart** — visual spending breakdown
+- **PWA** — install to home screen, works offline
 
 ## Quick Start
 
@@ -23,16 +26,9 @@ npm install
 npm run dev
 ```
 
-Opens at `http://localhost:3000`.
+## Install as App
 
-## Project Structure
-
-```
-src/
-├── App.jsx      # Full application
-├── index.css    # Global styles & animations
-└── main.jsx     # Entry point
-```
+After deploying (e.g. to Vercel or Netlify), open the URL on your phone and tap "Add to Home Screen". The app works offline after first load.
 
 ## Build
 
@@ -40,11 +36,24 @@ src/
 npm run build
 ```
 
-Output goes to `dist/`.
+## Project Structure
+
+```
+src/
+├── App.jsx      # Full application
+├── index.css    # Styles & animations
+└── main.jsx     # Entry point
+public/
+├── manifest.json   # PWA manifest
+├── sw.js           # Service worker
+├── icon-192.png    # App icon
+├── icon-512.png    # App icon large
+└── favicon.svg
+```
 
 ## Data
 
-All data persists in `localStorage` under `maverick-budget-data`. The data model uses a recursive node tree with entries attached to leaf nodes.
+All data in `localStorage` under `maverick-budget-data`. Recursive node tree with entries on leaf nodes.
 
 ## License
 
