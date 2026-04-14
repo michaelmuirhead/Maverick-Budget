@@ -248,22 +248,31 @@ function DraggableList({ items, renderItem, onReorder }) {
   );
 }
 
-// ── Pull to Refresh ──
-function PullToRefresh({ children, onRefresh }) {
-  const [pulling, setPulling] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
-  const startY = useRef(0);
-  const el = useRef(null);
-  const onTS = e => { if (el.current?.scrollTop === 0) startY.current = e.touches[0].clientY; else startY.current = 0; };
-  const onTM = e => { if (!startY.current) return; const dy = e.touches[0].clientY - startY.current; if (dy > 0 && dy < 120) setPulling(dy); };
-  const onTE = () => { if (pulling > 60) { setRefreshing(true); haptic(20); onRefresh(); setTimeout(() => { setRefreshing(false); setPulling(0); }, 600); } else setPulling(0); };
+// ── Scroll Container — only scrolls when content overflows ──
+function ScrollContainer({ children }) {
+  const ref = useRef(null);
+  const [needsScroll, setNeedsScroll] = useState(false);
+
+  useEffect(() => {
+    const check = () => {
+      if (ref.current) {
+        setNeedsScroll(ref.current.scrollHeight > ref.current.clientHeight);
+      }
+    };
+    check();
+    const obs = new ResizeObserver(check);
+    if (ref.current) obs.observe(ref.current);
+    // Also recheck on any DOM changes
+    const mut = new MutationObserver(check);
+    if (ref.current) mut.observe(ref.current, { childList: true, subtree: true });
+    return () => { obs.disconnect(); mut.disconnect(); };
+  }, []);
+
   return (
-    <div ref={el} onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} style={{ minHeight: "100vh", overflowY: "auto" }}>
-      {(pulling > 0 || refreshing) && (
-        <div style={{ textAlign: "center", padding: `${Math.min(pulling, 60) / 2}px 0`, color: T().textMuted, fontSize: 11, transition: refreshing ? "padding 0.3s" : "none" }}>
-          {refreshing ? "↻ Refreshing..." : pulling > 60 ? "↑ Release to refresh" : "↓ Pull to refresh"}
-        </div>
-      )}
+    <div ref={ref} style={{
+      height: "100vh", overflowY: needsScroll ? "auto" : "hidden",
+      WebkitOverflowScrolling: "touch", overscrollBehavior: "none",
+    }}>
       {children}
     </div>
   );
@@ -680,7 +689,7 @@ export default function App({ user, householdId }) {
         .app-shell{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
       `}</style>
       <div style={{ position: "absolute", top: -120, right: -80, width: 300, height: 300, background: t.glow, animation: "pulse 6s ease-in-out infinite", pointerEvents: "none" }} />
-      <PullToRefresh onRefresh={() => {}}>{ch}</PullToRefresh>
+      <ScrollContainer>{ch}</ScrollContainer>
     </div>
   );
 
@@ -698,10 +707,7 @@ export default function App({ user, householdId }) {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <button onClick={() => setShowHouseholdCode(!showHouseholdCode)} title="Invite code" style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 13, color: t.textSub }}>👥</button>
-            <button onClick={toggleTheme} title={`Switch to ${themeId === "midnight" ? "Ocean Depth" : "Midnight Indigo"}`}
-              style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.textSub }}>
-              {themeId === "midnight" ? "🌊" : "🌙"}
-            </button>
+            <button onClick={toggleTheme} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.textSub }}>{themeId === "midnight" ? "🌊" : "🌙"}</button>
             <button onClick={handleSignOut} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 10, fontWeight: 600, color: t.textMuted }}>Sign out</button>
           </div>
         </div>
