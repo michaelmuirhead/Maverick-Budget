@@ -663,6 +663,9 @@ export default function App({ user, householdId }) {
   const goTo = nid => setNavStack([...navStack, nid]);
   const goBack = () => setNavStack(navStack.slice(0, -1));
 
+  const [showHouseholdCode, setShowHouseholdCode] = useState(false);
+  const handleSignOut = () => { if (confirm("Sign out?")) signOut(auth); };
+
   const shell = ch => (
     <div className="app-shell" style={{ fontFamily: t.font, background: t.bg, color: t.text, minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", overflow: "hidden" }}>
       <style>{`
@@ -693,11 +696,23 @@ export default function App({ user, householdId }) {
             <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: "-0.02em", background: t.titleGrad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
             <span style={{ fontSize: 10, color: t.textDim, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
           </div>
-          <button onClick={toggleTheme} title={`Switch to ${themeId === "midnight" ? "Ocean Depth" : "Midnight Indigo"}`}
-            style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.textSub, display: "flex", alignItems: "center", gap: 4 }}>
-            {themeId === "midnight" ? "🌊" : "🌙"} {themeId === "midnight" ? "Ocean" : "Midnight"}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => setShowHouseholdCode(!showHouseholdCode)} title="Invite code" style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 13, color: t.textSub }}>👥</button>
+            <button onClick={toggleTheme} title={`Switch to ${themeId === "midnight" ? "Ocean Depth" : "Midnight Indigo"}`}
+              style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.textSub }}>
+              {themeId === "midnight" ? "🌊" : "🌙"}
+            </button>
+            <button onClick={handleSignOut} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 10, fontWeight: 600, color: t.textMuted }}>Sign out</button>
+          </div>
         </div>
+        {showHouseholdCode && (
+          <div style={{ background: `${t.accent}12`, border: `1px solid ${t.accent}25`, borderRadius: 12, padding: "12px 16px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
+            <div style={{ fontSize: 10, color: t.accentLight, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Household Invite Code</div>
+            <div style={{ fontSize: 24, fontWeight: 700, fontFamily: T().mono, color: t.text, letterSpacing: "0.15em" }}>{householdId}</div>
+            <div style={{ fontSize: 11, color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>Share this code with your partner so they can join and see the same budgets in real time.</div>
+            <div style={{ fontSize: 10, color: t.textDim, marginTop: 4 }}>Signed in as {user?.email}</div>
+          </div>
+        )}
         <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Folders ({roots.length})</div>
         <div style={{ paddingBottom: 100 }}>
           <DraggableList items={stats} onReorder={ids => app.reorderNodes(null, ids)} renderItem={(f, _i, onDragHandle) => (
