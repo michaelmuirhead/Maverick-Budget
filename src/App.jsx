@@ -183,78 +183,116 @@ function EditableTitle({ value, onSave, style: s }) { const [editing, setEditing
 function SearchBar({ value, onChange }) { return (<div style={{ position: "relative", marginBottom: 12 }}><span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#475569", fontSize: 14 }}>⌕</span><input value={value} onChange={e => onChange(e.target.value)} placeholder="Search transactions..." style={{ width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "8px 10px 8px 30px", color: T().text, fontSize: 13, outline: "none" }} />{value && <button onClick={() => onChange("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 14, padding: 2 }}>×</button>}</div>); }
 function ColorPicker({ value, onChange }) { const [open, setOpen] = useState(false); return (<div style={{ position: "relative" }}><button onClick={() => setOpen(!open)} style={{ width: 26, height: 26, borderRadius: 6, background: value, border: "2px solid rgba(255,255,255,0.15)", cursor: "pointer", flexShrink: 0 }} />{open && <div style={{ position: "absolute", top: 32, right: 0, background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: 8, display: "flex", flexWrap: "wrap", gap: 6, width: 140, zIndex: 20, animation: "slideIn 0.15s ease" }}>{PALETTE.map(c => (<button key={c} onClick={() => { onChange(c); setOpen(false); }} style={{ width: 22, height: 22, borderRadius: 5, background: c, border: c === value ? "2px solid #fff" : "2px solid transparent", cursor: "pointer", padding: 0 }} />))}</div>}</div>); }
 function DraggableList({ items, renderItem, onReorder }) {
+  const [order, setOrder] = useState(null); // reordered indices during drag
   const [dragIdx, setDragIdx] = useState(null);
-  const [overIdx, setOverIdx] = useState(null);
+  const [dragY, setDragY] = useState(0);
   const listRef = useRef(null);
   const rowRefs = useRef([]);
-  const touchStartY = useRef(0);
-  const isDragging = useRef(false);
+  const heights = useRef([]);
+  const startY = useRef(0);
+  const startIdx = useRef(0);
+  const currentOver = useRef(0);
+  const active = useRef(false);
 
-  // Find which index a Y position corresponds to
-  const idxFromY = (y) => {
-    for (let i = 0; i < rowRefs.current.length; i++) {
-      const el = rowRefs.current[i];
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      if (y < rect.top + rect.height / 2) return i;
-    }
-    return rowRefs.current.length - 1;
+  const captureHeights = () => {
+    heights.current = rowRefs.current.map(el => el?.getBoundingClientRect()?.height || 56);
   };
 
   const handleTouchStart = (e, i) => {
-    touchStartY.current = e.touches[0].clientY;
-    isDragging.current = false;
-    // Delay to distinguish from tap
-    setTimeout(() => {
-      if (isDragging.current === false) {
-        setDragIdx(i);
-        isDragging.current = true;
-        haptic(10);
-      }
-    }, 200);
+    captureHeights();
+    startY.current = e.touches[0].clientY;
+    startIdx.current = i;
+    currentOver.current = i;
+    active.current = true;
+    setDragIdx(i);
+    setDragY(0);
+    setOrder(items.map((_, idx) => idx));
+    haptic(10);
   };
 
   const handleTouchMove = (e) => {
-    if (dragIdx === null && !isDragging.current) return;
-    isDragging.current = true;
-    setDragIdx(prev => prev !== null ? prev : null);
-    if (dragIdx === null) return;
+    if (!active.current || dragIdx === null) return;
     e.preventDefault();
     const y = e.touches[0].clientY;
-    const newOver = idxFromY(y);
-    if (newOver !== overIdx) { setOverIdx(newOver); haptic(5); }
+    const dy = y - startY.current;
+    setDragY(dy);
+
+    // Figure out which index the dragged item should be at
+    let cumulative = 0;
+    let newIdx = startIdx.current;
+    if (dy > 0) {
+      // Moving down
+      for (let i = startIdx.current + 1; i < items.length; i++) {
+        cumulative += heights.current[i];
+        if (dy > cumulative - heights.current[i] / 2) newIdx = i;
+        else break;
+      }
+    } else {
+      // Moving up
+      for (let i = startIdx.current - 1; i >= 0; i--) {
+        cumulative -= heights.current[i];
+        if (dy < cumulative + heights.current[i] / 2) newIdx = i;
+        else break;
+      }
+    }
+
+    if (newIdx !== currentOver.current) {
+      currentOver.current = newIdx;
+      haptic(3);
+      // Build new order
+      const newOrder = items.map((_, idx) => idx);
+      const [moved] = newOrder.splice(startIdx.current, 1);
+      newOrder.splice(newIdx, 0, moved);
+      setOrder(newOrder);
+    }
   };
 
   const handleTouchEnd = () => {
-    if (dragIdx !== null && overIdx !== null && dragIdx !== overIdx) {
-      const newOrder = [...items];
-      const [moved] = newOrder.splice(dragIdx, 1);
-      newOrder.splice(overIdx, 0, moved);
-      onReorder(newOrder.map(x => x.id));
-      haptic(15);
+    if (!active.current) return;
+    active.current = false;
+    if (order && currentOver.current !== startIdx.current) {
+      const finalOrder = order.map(i => items[i].id);
+      onReorder(finalOrder);
+      haptic(12);
     }
     setDragIdx(null);
-    setOverIdx(null);
-    isDragging.current = false;
+    setDragY(0);
+    setOrder(null);
+  };
+
+  // Calculate Y offset for each item based on current drag reorder
+  const getTranslateY = (i) => {
+    if (dragIdx === null || !order) return 0;
+    if (i === startIdx.current) return 0; // dragged item uses dragY
+    const currentPos = order.indexOf(i);
+    const originalPos = i;
+    const diff = currentPos - originalPos;
+    if (diff === 0) return 0;
+    // Shift by the height of the dragged item
+    return diff * (heights.current[startIdx.current] || 56);
   };
 
   return (
-    <div ref={listRef} style={{ display: "flex", flexDirection: "column", gap: 8 }}
+    <div ref={listRef} style={{ display: "flex", flexDirection: "column", gap: 8, position: "relative" }}
       onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchEnd}>
-      {items.map((item, i) => (
-        <div key={item.id} ref={el => rowRefs.current[i] = el}
-          draggable onDragStart={() => setDragIdx(i)} onDragOver={e => { e.preventDefault(); setOverIdx(i); }}
-          onDrop={() => { if (dragIdx !== null && dragIdx !== i) { const n = [...items]; const [m] = n.splice(dragIdx, 1); n.splice(i, 0, m); onReorder(n.map(x => x.id)); } setDragIdx(null); setOverIdx(null); }}
-          onDragEnd={() => { setDragIdx(null); setOverIdx(null); }}
-          style={{
-            opacity: dragIdx === i ? 0.4 : 1,
-            borderTop: overIdx === i && dragIdx !== null && dragIdx !== i ? "2px solid #6366f1" : "2px solid transparent",
-            transition: dragIdx !== null ? "none" : "opacity 0.15s",
-            transform: dragIdx === i ? "scale(0.97)" : "none",
-          }}>
-          {renderItem(item, i, (e) => handleTouchStart(e, i))}
-        </div>
-      ))}
+      {items.map((item, i) => {
+        const isDragged = dragIdx === i;
+        const ty = isDragged ? dragY : getTranslateY(i);
+        return (
+          <div key={item.id} ref={el => rowRefs.current[i] = el}
+            style={{
+              transform: `translateY(${ty}px)${isDragged ? " scale(1.02)" : ""}`,
+              transition: isDragged ? "none" : "transform 0.25s cubic-bezier(0.2, 0, 0, 1)",
+              zIndex: isDragged ? 50 : 1,
+              opacity: isDragged ? 0.9 : 1,
+              boxShadow: isDragged ? "0 8px 30px rgba(0,0,0,0.4)" : "none",
+              borderRadius: 12,
+              position: "relative",
+            }}>
+            {renderItem(item, i, (e) => handleTouchStart(e, i))}
+          </div>
+        );
+      })}
     </div>
   );
 }
