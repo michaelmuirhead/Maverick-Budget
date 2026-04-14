@@ -53,26 +53,83 @@ function parseCSV(text) {
   return lines.slice(1).map(r => { const amt = Math.abs(parseFloat(r[4]) || 0); const type = parseFloat(r[4]) >= 0 ? "income" : "expense"; const cl = (r[2]||"").toLowerCase(); const cat = CATEGORIES.find(c => c.label.toLowerCase() === cl) || CATEGORIES[7]; const tags = r[5] ? r[5].split(";").filter(Boolean) : []; return { label: r[1] || "(imported)", category: type === "income" ? "income" : cat.id, type, amount: amt, date: r[0] || todayStr(), tags }; }).filter(e => e.amount > 0);
 }
 
-// ── State ──
-function useApp() {
-  const [d, setD] = useState(() => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) return processRecurrings(JSON.parse(r)); } catch {} return { nodes: [], entries: [], recurrings: [], limits: {} }; });
-  useEffect(() => { try { localStorage.setItem("maverick-budget-data", JSON.stringify(d)); } catch {} }, [d]);
-  const up = fn => setD(p => fn(p));
+// ── State with Firebase Sync ──
+import { db, auth, signOut, doc, setDoc, onSnapshot } from "./firebase";
+
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {} };
+
+function useApp(user) {
+  const [d, setD] = useState(EMPTY_DATA);
+  const [synced, setSynced] = useState(false);
+  const saveTimer = useRef(null);
+  const skipNextRemote = useRef(false);
+
+  // Firestore doc path: users/{uid}/data/budget
+  const docRef = user ? doc(db, "users", user.uid, "data", "budget") : null;
+
+  // Subscribe to real-time updates from Firestore
+  useEffect(() => {
+    if (!docRef) return;
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (skipNextRemote.current) { skipNextRemote.current = false; return; }
+      if (snap.exists()) {
+        const remote = snap.data();
+        const parsed = {
+          nodes: remote.nodes || [],
+          entries: remote.entries || [],
+          recurrings: remote.recurrings || [],
+          limits: remote.limits || {},
+        };
+        setD(processRecurrings(parsed));
+      }
+      setSynced(true);
+    }, (err) => {
+      console.error("Firestore listen error:", err);
+      // Fallback to localStorage
+      try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {}
+      setSynced(true);
+    });
+    return unsub;
+  }, [user?.uid]);
+
+  // Debounced save to Firestore + localStorage
+  const saveToCloud = useCallback((data) => {
+    // Always save locally
+    try { localStorage.setItem("maverick-budget-data", JSON.stringify(data)); } catch {}
+    // Debounced cloud save
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      if (docRef) {
+        skipNextRemote.current = true;
+        setDoc(docRef, {
+          nodes: data.nodes || [],
+          entries: data.entries || [],
+          recurrings: data.recurrings || [],
+          limits: data.limits || {},
+          updatedAt: new Date().toISOString(),
+          updatedBy: user?.email || "unknown",
+        }).catch(err => console.error("Save error:", err));
+      }
+    }, 500);
+  }, [docRef, user]);
+
+  const up = fn => setD(p => { const next = fn(p); saveToCloud(next); return next; });
   const getDesc = useCallback((nodes, nid) => { const kids = nodes.filter(n => n.parentId === nid); let all = kids.map(k => k.id); kids.forEach(k => { all = all.concat(getDesc(nodes, k.id)); }); return all; }, []);
+
   return {
-    d,
-    addNode: useCallback(n => up(p => ({ ...p, nodes: [...p.nodes, n] })), []),
-    updateNode: useCallback((id, u) => up(p => ({ ...p, nodes: p.nodes.map(n => n.id === id ? { ...n, ...u } : n) })), []),
-    removeNode: useCallback(id => up(p => { const all = [id, ...getDesc(p.nodes, id)]; return { ...p, nodes: p.nodes.filter(n => !all.includes(n.id)), entries: p.entries.filter(e => !all.includes(e.nodeId)), recurrings: (p.recurrings||[]).filter(r => !all.includes(r.nodeId)) }; }), [getDesc]),
-    reorderNodes: useCallback((pid, ids) => up(p => { const others = p.nodes.filter(n => n.parentId !== pid); const reordered = ids.map(id => p.nodes.find(n => n.id === id)).filter(Boolean); return { ...p, nodes: [...others, ...reordered] }; }), []),
-    addEntry: useCallback(e => up(p => ({ ...p, entries: [...p.entries, e] })), []),
-    updateEntry: useCallback((id, u) => up(p => ({ ...p, entries: p.entries.map(e => e.id === id ? { ...e, ...u } : e) })), []),
-    removeEntry: useCallback(id => up(p => ({ ...p, entries: p.entries.filter(e => e.id !== id) })), []),
-    addRecurring: useCallback(r => up(p => ({ ...p, recurrings: [...(p.recurrings||[]), r] })), []),
-    updateRecurring: useCallback((id, u) => up(p => ({ ...p, recurrings: (p.recurrings||[]).map(r => r.id === id ? { ...r, ...u } : r) })), []),
-    removeRecurring: useCallback(id => up(p => ({ ...p, recurrings: (p.recurrings||[]).filter(r => r.id !== id) })), []),
-    setLimit: useCallback((k, v) => up(p => ({ ...p, limits: { ...(p.limits||{}), [k]: v } })), []),
-    removeLimit: useCallback(k => up(p => { const l = { ...(p.limits||{}) }; delete l[k]; return { ...p, limits: l }; }), []),
+    d, synced,
+    addNode: useCallback(n => up(p => ({ ...p, nodes: [...p.nodes, n] })), [saveToCloud]),
+    updateNode: useCallback((id, u) => up(p => ({ ...p, nodes: p.nodes.map(n => n.id === id ? { ...n, ...u } : n) })), [saveToCloud]),
+    removeNode: useCallback(id => up(p => { const all = [id, ...getDesc(p.nodes, id)]; return { ...p, nodes: p.nodes.filter(n => !all.includes(n.id)), entries: p.entries.filter(e => !all.includes(e.nodeId)), recurrings: (p.recurrings||[]).filter(r => !all.includes(r.nodeId)) }; }), [getDesc, saveToCloud]),
+    reorderNodes: useCallback((pid, ids) => up(p => { const others = p.nodes.filter(n => n.parentId !== pid); const reordered = ids.map(id => p.nodes.find(n => n.id === id)).filter(Boolean); return { ...p, nodes: [...others, ...reordered] }; }), [saveToCloud]),
+    addEntry: useCallback(e => up(p => ({ ...p, entries: [...p.entries, e] })), [saveToCloud]),
+    updateEntry: useCallback((id, u) => up(p => ({ ...p, entries: p.entries.map(e => e.id === id ? { ...e, ...u } : e) })), [saveToCloud]),
+    removeEntry: useCallback(id => up(p => ({ ...p, entries: p.entries.filter(e => e.id !== id) })), [saveToCloud]),
+    addRecurring: useCallback(r => up(p => ({ ...p, recurrings: [...(p.recurrings||[]), r] })), [saveToCloud]),
+    updateRecurring: useCallback((id, u) => up(p => ({ ...p, recurrings: (p.recurrings||[]).map(r => r.id === id ? { ...r, ...u } : r) })), [saveToCloud]),
+    removeRecurring: useCallback(id => up(p => ({ ...p, recurrings: (p.recurrings||[]).filter(r => r.id !== id) })), [saveToCloud]),
+    setLimit: useCallback((k, v) => up(p => ({ ...p, limits: { ...(p.limits||{}), [k]: v } })), [saveToCloud]),
+    removeLimit: useCallback(k => up(p => { const l = { ...(p.limits||{}) }; delete l[k]; return { ...p, limits: l }; }), [saveToCloud]),
     getDesc,
   };
 }
@@ -416,9 +473,9 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, onBack
 // ══════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════
-export default function App() {
-  const app = useApp();
-  const { d } = app;
+export default function App({ user }) {
+  const app = useApp(user);
+  const { d, synced } = app;
   const [navStack, setNavStack] = useState([]);
   const [addingRoot, setAddingRoot] = useState(false);
   const [showArchivedRoot, setShowArchivedRoot] = useState(false);
@@ -426,6 +483,8 @@ export default function App() {
   const par = navStack.length >= 2 ? d.nodes.find(n => n.id === navStack[navStack.length - 2]) : null;
   const goTo = nid => setNavStack([...navStack, nid]);
   const goBack = () => setNavStack(navStack.slice(0, -1));
+
+  const handleSignOut = () => { if (confirm("Sign out?")) signOut(auth); };
 
   const shell = ch => (
     <div className="app-shell" style={{ fontFamily: "'DM Sans', 'Segoe UI', system-ui, sans-serif", background: "linear-gradient(160deg, #0a0a1a 0%, #0f1629 40%, #0a0a1a 100%)", color: "#e2e8f0", minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", overflow: "hidden" }}>
@@ -445,6 +504,13 @@ export default function App() {
     </div>
   );
 
+  // Loading state
+  if (!synced) return shell(
+    <div style={{ padding: "24px 20px", textAlign: "center", paddingTop: 100 }}>
+      <div style={{ fontSize: 14, color: "#64748b" }}>Syncing...</div>
+    </div>
+  );
+
   if (!cur) {
     const allRoots = d.nodes.filter(n => n.parentId === null);
     const roots = showArchivedRoot ? allRoots : allRoots.filter(n => !n.archived);
@@ -452,9 +518,15 @@ export default function App() {
     const stats = roots.map(f => ({ ...f, ...getNodeBalance(d.nodes, d.entries, f.id), childCount: d.nodes.filter(n => n.parentId === f.id).length }));
     return shell(
       <div style={{ padding: "24px 20px 20px", animation: "fadeIn 0.4s ease" }}>
-        <div style={{ marginBottom: 24 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: "-0.02em", background: "linear-gradient(135deg, #e2e8f0, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
-          <span style={{ fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+          <div>
+            <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: "-0.02em", background: "linear-gradient(135deg, #e2e8f0, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
+            <span style={{ fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 10, color: "#475569", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user?.email}</span>
+            <button onClick={handleSignOut} style={{ background: "rgba(255,255,255,0.05)", border: "none", color: "#64748b", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Sign out</button>
+          </div>
         </div>
         <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Folders ({roots.length})</div>
         <div style={{ paddingBottom: 100 }}>
