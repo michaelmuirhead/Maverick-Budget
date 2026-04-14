@@ -1,14 +1,15 @@
 {
   "name": "maverick-budget",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "A clean, minimal budget tracker inspired by Fudget",
+  "description": "A clean, minimal budget tracker with Firebase cloud sync",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "firebase": "^11.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
