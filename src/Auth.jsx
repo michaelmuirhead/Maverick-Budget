@@ -55,6 +55,8 @@ export default function Auth() {
       color: "#e2e8f0", minHeight: "100vh", maxWidth: 480, margin: "0 auto",
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       padding: "40px 24px",
+      overflowY: "auto", WebkitOverflowScrolling: "touch",
+      position: "relative", zIndex: 1,
     }}>
       {/* Logo */}
       <div style={{ textAlign: "center", marginBottom: 40 }}>

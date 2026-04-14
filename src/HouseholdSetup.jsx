@@ -118,6 +118,8 @@ export default function HouseholdSetup({ user, onReady }) {
       color: "#e2e8f0", minHeight: "100vh", maxWidth: 480, margin: "0 auto",
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       padding: "40px 24px",
+      overflowY: "auto", WebkitOverflowScrolling: "touch",
+      position: "relative", zIndex: 1,
     }}>
       <div style={{ textAlign: "center", marginBottom: 32 }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, background: "linear-gradient(135deg, #e2e8f0, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
