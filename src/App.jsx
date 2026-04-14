@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import NotificationManager from "./NotificationManager";
 
 const DEFAULT_CATEGORIES = [
   { id: "income", label: "Income", icon: "💰", color: "#22c55e" },
@@ -97,6 +96,7 @@ function parseCSV(text) {
 
 // ── State with Firebase Sync ──
 import { db, auth, signOut, doc, setDoc, onSnapshot } from "./firebase";
+import NotificationManager from "./NotificationManager";
 
 const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [] };
 
@@ -107,9 +107,7 @@ function useApp(user, householdId) {
   const skipNextRemote = useRef(false);
   const docRef = householdId ? doc(db, "households", householdId, "data", "budget") : null;
 
-  useEffect(() => {
-    window.__CUSTOM_CATS__ = d.customCategories || [];
-  }, [d]);
+  useEffect(() => { window.__CUSTOM_CATS__ = d.customCategories || []; }, [d]);
 
   useEffect(() => {
     if (!docRef) return;
@@ -142,6 +140,11 @@ function useApp(user, householdId) {
     addEntry: useCallback(e => up(p => ({ ...p, entries: [...p.entries, e] })), []),
     updateEntry: useCallback((id, u) => up(p => ({ ...p, entries: p.entries.map(e => e.id === id ? { ...e, ...u } : e) })), []),
     removeEntry: useCallback(id => up(p => ({ ...p, entries: p.entries.filter(e => e.id !== id) })), []),
+    reorderEntries: useCallback((nodeId, orderedIds) => up(p => {
+      const others = p.entries.filter(e => e.nodeId !== nodeId);
+      const reordered = orderedIds.map(id => p.entries.find(e => e.id === id)).filter(Boolean);
+      return { ...p, entries: [...others, ...reordered] };
+    }), []),
     addRecurring: useCallback(r => up(p => ({ ...p, recurrings: [...(p.recurrings||[]), r] })), []),
     updateRecurring: useCallback((id, u) => up(p => ({ ...p, recurrings: (p.recurrings||[]).map(r => r.id === id ? { ...r, ...u } : r) })), []),
     removeRecurring: useCallback(id => up(p => ({ ...p, recurrings: (p.recurrings||[]).filter(r => r.id !== id) })), []),
@@ -451,7 +454,7 @@ function CategoryManager({ customCategories = [], onAdd, onRemove }) {
 }
 
 // ── Entry Row ──
-function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit }) {
+function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle }) {
   const cat = allCats().find(c => c.id === entry.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const isInc = entry.type === "income";
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
   const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
@@ -492,8 +495,9 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         </button>
       </div>
       <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onClick={() => { if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
-        style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: T().row, borderRadius: 10, borderLeft: `3px solid ${cat.color}`, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
-        <span style={{ fontSize: 18, width: 28, textAlign: "center", opacity: 0.7 }}>{cat.icon}</span>
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: T().row, borderRadius: 10, borderLeft: `3px solid ${cat.color}`, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
+        <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDark, fontSize: 12, padding: "2px 2px", touchAction: "none", userSelect: "none", flexShrink: 0 }}>⠿</div>
+        <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: 0.7, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 500, color: T().text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}{entry.recurring && <span style={{ fontSize: 9, color: T().accent, marginLeft: 6, fontWeight: 600 }}>↻</span>}</div>
           <div style={{ fontSize: 11, color: T().textMuted, marginTop: 1 }}>{cat.label} · {entry.date}{entry.tags?.length > 0 && <span style={{ marginLeft: 4, color: T().accentLight }}>{entry.tags.map(t => `#${t}`).join(" ")}</span>}</div>
@@ -539,7 +543,7 @@ function DonutChart({ entries }) {
 // ══════════════════════════════════════════════════
 // NODE PAGE
 // ══════════════════════════════════════════════════
-function NodePage({ node, parentName, nodes, entries, recurrings, limits, customCategories, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, addRecurring, updateRecurring, removeRecurring, setLimit, removeLimit, addCategory, removeCategory, getDesc }) {
+function NodePage({ node, parentName, nodes, entries, recurrings, limits, customCategories, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addRecurring, updateRecurring, removeRecurring, setLimit, removeLimit, addCategory, removeCategory, getDesc }) {
   const [addingChild, setAddingChild] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
@@ -647,9 +651,9 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
             {directEntries.length > 3 && <SearchBar value={search} onChange={setSearch} />}
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</div>
             {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {[...filtered].reverse().map(e => (<EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} />))}
-              </div>
+              <DraggableList items={[...filtered].reverse()} onReorder={ids => reorderEntries(node.id, [...ids].reverse())} renderItem={(e, _i, onDragHandle) => (
+                <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} />
+              )} />
             )}
             <BottomBar>
               <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
@@ -713,24 +717,12 @@ export default function App({ user, householdId }) {
             <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: "-0.02em", background: t.titleGrad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
             <span style={{ fontSize: 10, color: t.textDim, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button onClick={() => setShowHouseholdCode(!showHouseholdCode)} title="Invite code" style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 13, color: t.textSub }}>👥</button>
-            <button onClick={toggleTheme} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.textSub }}>{themeId === "midnight" ? "🌊" : "🌙"}</button>
-            <button onClick={handleSignOut} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 8px", cursor: "pointer", fontSize: 10, fontWeight: 600, color: t.textMuted }}>Sign out</button>
-          </div>
+          <button onClick={toggleTheme} title={`Switch to ${themeId === "midnight" ? "Ocean Depth" : "Midnight Indigo"}`}
+            style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.textSub, display: "flex", alignItems: "center", gap: 4 }}>
+            {themeId === "midnight" ? "🌊" : "🌙"} {themeId === "midnight" ? "Ocean" : "Midnight"}
+          </button>
         </div>
-        {showHouseholdCode && (
-          <div style={{ background: `${t.accent}12`, border: `1px solid ${t.accent}25`, borderRadius: 12, padding: "12px 16px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
-            <div style={{ fontSize: 10, color: t.accentLight, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Household Invite Code</div>
-            <div style={{ fontSize: 24, fontWeight: 700, fontFamily: T().mono, color: t.text, letterSpacing: "0.15em" }}>{householdId}</div>
-            <div style={{ fontSize: 11, color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>Share this code with your partner so they can join and see the same budgets in real time.</div>
-            <div style={{ fontSize: 10, color: t.textDim, marginTop: 4 }}>Signed in as {user?.email}</div>
-          </div>
-        )}
-        <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>
-          <NotificationManager userId={user?.uid} householdId={householdId} />
-          Folders ({roots.length})
-        </div>
+        <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Folders ({roots.length})</div>
         <div style={{ paddingBottom: 100 }}>
           <DraggableList items={stats} onReorder={ids => app.reorderNodes(null, ids)} renderItem={(f, _i, onDragHandle) => (
             <div onClick={() => goTo(f.id)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: f.archived ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.02)", borderRadius: 12, borderLeft: `4px solid ${f.color}`, cursor: "pointer", transition: "background 0.15s", opacity: f.archived ? 0.5 : 1 }}
@@ -758,7 +750,7 @@ export default function App({ user, householdId }) {
   return shell(
     <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} recurrings={d.recurrings} limits={d.limits} customCategories={d.customCategories}
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
-      addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} addRecurring={app.addRecurring} updateRecurring={app.updateRecurring} removeRecurring={app.removeRecurring}
+      addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries} addRecurring={app.addRecurring} updateRecurring={app.updateRecurring} removeRecurring={app.removeRecurring}
       setLimit={app.setLimit} removeLimit={app.removeLimit} addCategory={app.addCategory} removeCategory={app.removeCategory} getDesc={app.getDesc} />
   );
 }
