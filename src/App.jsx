@@ -58,14 +58,14 @@ import { db, auth, signOut, doc, setDoc, onSnapshot } from "./firebase";
 
 const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {} };
 
-function useApp(user) {
+function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
   const [synced, setSynced] = useState(false);
   const saveTimer = useRef(null);
   const skipNextRemote = useRef(false);
 
-  // Firestore doc path: users/{uid}/data/budget
-  const docRef = user ? doc(db, "users", user.uid, "data", "budget") : null;
+  // Firestore doc path: households/{householdId}/data/budget
+  const docRef = householdId ? doc(db, "households", householdId, "data", "budget") : null;
 
   // Subscribe to real-time updates from Firestore
   useEffect(() => {
@@ -90,7 +90,7 @@ function useApp(user) {
       setSynced(true);
     });
     return unsub;
-  }, [user?.uid]);
+  }, [householdId]);
 
   // Debounced save to Firestore + localStorage
   const saveToCloud = useCallback((data) => {
@@ -473,12 +473,13 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, onBack
 // ══════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════
-export default function App({ user }) {
-  const app = useApp(user);
+export default function App({ user, householdId }) {
+  const app = useApp(user, householdId);
   const { d, synced } = app;
   const [navStack, setNavStack] = useState([]);
   const [addingRoot, setAddingRoot] = useState(false);
   const [showArchivedRoot, setShowArchivedRoot] = useState(false);
+  const [showHouseholdCode, setShowHouseholdCode] = useState(false);
   const cur = navStack.length > 0 ? d.nodes.find(n => n.id === navStack[navStack.length - 1]) : null;
   const par = navStack.length >= 2 ? d.nodes.find(n => n.id === navStack[navStack.length - 2]) : null;
   const goTo = nid => setNavStack([...navStack, nid]);
@@ -524,10 +525,18 @@ export default function App({ user }) {
             <span style={{ fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 10, color: "#475569", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user?.email}</span>
+            <button onClick={() => setShowHouseholdCode(!showHouseholdCode)} title="Invite code" style={{ background: "rgba(255,255,255,0.05)", border: "none", color: "#64748b", borderRadius: 6, padding: "6px 8px", cursor: "pointer", fontSize: 13 }}>👥</button>
             <button onClick={handleSignOut} style={{ background: "rgba(255,255,255,0.05)", border: "none", color: "#64748b", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Sign out</button>
           </div>
         </div>
+        {showHouseholdCode && (
+          <div style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.15)", borderRadius: 12, padding: "12px 16px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
+            <div style={{ fontSize: 10, color: "#818cf8", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Household Invite Code</div>
+            <div style={{ fontSize: 24, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "#e2e8f0", letterSpacing: "0.15em" }}>{householdId}</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, lineHeight: 1.4 }}>Share this code with your partner so they can join your household and see the same budgets in real time.</div>
+            <div style={{ fontSize: 10, color: "#475569", marginTop: 4 }}>Signed in as {user?.email}</div>
+          </div>
+        )}
         <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Folders ({roots.length})</div>
         <div style={{ paddingBottom: 100 }}>
           <DraggableList items={stats} onReorder={ids => app.reorderNodes(null, ids)} renderItem={f => (
