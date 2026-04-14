@@ -1,4 +1,4 @@
-const CACHE_NAME = 'maverick-v2';
+const CACHE_NAME = 'maverick-v3';
 const PRECACHE = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', (e) => {
