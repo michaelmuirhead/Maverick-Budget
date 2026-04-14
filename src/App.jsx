@@ -11,7 +11,7 @@ const CATEGORIES = [
   { id: "other", label: "Other", icon: "•", color: "#6b7280" },
 ];
 const PALETTE = ["#6366f1","#3b82f6","#22c55e","#f59e0b","#ef4444","#ec4899","#8b5cf6","#06b6d4","#14b8a6","#f97316","#a855f7","#64748b"];
-const FREQ = [{ id: "weekly", label: "Weekly", days: 7 },{ id: "biweekly", label: "Bi-weekly", days: 14 },{ id: "monthly", label: "Monthly", days: 30 },{ id: "yearly", label: "Yearly", days: 365 }];
+const FREQ = [{ id: "weekly", label: "Weekly", days: 7 },{ id: "biweekly", label: "Bi-weekly", days: 14 },{ id: "semimonthly", label: "Semi-monthly", days: 15 },{ id: "monthly", label: "Monthly", days: 30 },{ id: "yearly", label: "Yearly", days: 365 }];
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function fmt(n) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n); }
@@ -105,6 +105,7 @@ function useApp() {
     updateEntry: useCallback((id, u) => up(p => ({ ...p, entries: p.entries.map(e => e.id === id ? { ...e, ...u } : e) })), []),
     removeEntry: useCallback(id => up(p => ({ ...p, entries: p.entries.filter(e => e.id !== id) })), []),
     addRecurring: useCallback(r => up(p => ({ ...p, recurrings: [...(p.recurrings || []), r] })), []),
+    updateRecurring: useCallback((id, u) => up(p => ({ ...p, recurrings: (p.recurrings || []).map(r => r.id === id ? { ...r, ...u } : r) })), []),
     removeRecurring: useCallback(id => up(p => ({ ...p, recurrings: (p.recurrings || []).filter(r => r.id !== id) })), []),
     setLimit: useCallback((k, v) => up(p => ({ ...p, limits: { ...(p.limits || {}), [k]: v } })), []),
     removeLimit: useCallback(k => up(p => { const l = { ...(p.limits || {}) }; delete l[k]; return { ...p, limits: l }; }), []),
@@ -244,10 +245,12 @@ function BudgetAlerts({ nodeId, entries, limits }) {
 }
 
 // ── Recurring Panel ──
-function RecurringPanel({ nodeId, recurrings, onAdd, onRemove, onAddEntry }) {
+function RecurringPanel({ nodeId, recurrings, onAdd, onUpdate, onRemove, onAddEntry }) {
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ label: "", amount: "", category: "other", type: "expense", frequency: "monthly" });
   const nr = (recurrings || []).filter(r => r.nodeId === nodeId);
+
   const handleAdd = () => {
     const amount = parseFloat(form.amount); if (!form.label.trim() || !amount || amount <= 0) return;
     const cat = form.type === "income" ? "income" : form.category;
@@ -255,19 +258,76 @@ function RecurringPanel({ nodeId, recurrings, onAdd, onRemove, onAddEntry }) {
     onAddEntry({ id: uid(), nodeId, label: form.label.trim(), amount, category: cat, type: form.type, date: todayStr(), dateISO: todayISO(), recurring: true });
     setForm({ label: "", amount: "", category: "other", type: "expense", frequency: "monthly" }); setAdding(false);
   };
+
+  const RecurringRow = ({ r }) => {
+    const cat = CATEGORIES.find(c => c.id === r.category) || CATEGORIES[7];
+    const freq = FREQ.find(f => f.id === r.frequency);
+    const isEditing = editingId === r.id;
+    const [ef, setEf] = useState({ label: r.label, amount: String(r.amount), category: r.category, type: r.type, frequency: r.frequency });
+
+    const commitEdit = () => {
+      const amount = parseFloat(ef.amount);
+      if (!ef.label.trim() || !amount || amount <= 0) { setEditingId(null); return; }
+      onUpdate(r.id, { label: ef.label.trim(), amount, category: ef.type === "income" ? "income" : ef.category, type: ef.type, frequency: ef.frequency });
+      setEditingId(null);
+    };
+
+    if (isEditing) {
+      return (
+        <div style={{ padding: 10, background: "rgba(255,255,255,0.04)", borderRadius: 8, borderLeft: `3px solid ${cat.color}`, display: "flex", flexDirection: "column", gap: 6, animation: "slideIn 0.15s ease" }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            {["expense", "income"].map(t => (
+              <button key={t} onClick={() => setEf({ ...ef, type: t })} style={{ flex: 1, padding: "5px 0", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600, textTransform: "uppercase", background: ef.type === t ? (t === "income" ? "#22c55e" : "#ef4444") : "rgba(255,255,255,0.05)", color: ef.type === t ? "#0a0a1a" : "#94a3b8" }}>{t}</button>
+            ))}
+          </div>
+          <input value={ef.label} onChange={e => setEf({ ...ef, label: e.target.value })} placeholder="Label"
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 8px", color: "#e2e8f0", fontSize: 12, outline: "none" }} />
+          <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ position: "relative", flex: 1 }}>
+              <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "#64748b", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>$</span>
+              <input value={ef.amount} onChange={e => setEf({ ...ef, amount: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00"
+                style={{ width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 8px 5px 20px", color: "#e2e8f0", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
+            </div>
+            <select value={ef.frequency} onChange={e => setEf({ ...ef, frequency: e.target.value })}
+              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 6px", color: "#e2e8f0", fontSize: 11, outline: "none", cursor: "pointer" }}>
+              {FREQ.map(f => (<option key={f.id} value={f.id}>{f.label}</option>))}
+            </select>
+          </div>
+          {ef.type === "expense" && (
+            <select value={ef.category} onChange={e => setEf({ ...ef, category: e.target.value })}
+              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 6px", color: "#e2e8f0", fontSize: 11, outline: "none" }}>
+              {CATEGORIES.filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}
+            </select>
+          )}
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={commitEdit} style={{ flex: 1, padding: "7px 0", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, background: "#6366f1", color: "#fff" }}>Save</button>
+            <button onClick={() => setEditingId(null)} style={{ padding: "7px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, color: "#94a3b8", background: "rgba(255,255,255,0.05)" }}>Cancel</button>
+            <button onClick={() => { onRemove(r.id); setEditingId(null); }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>Delete</button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div onClick={() => setEditingId(r.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 8, borderLeft: `3px solid ${cat.color}`, cursor: "pointer", transition: "background 0.15s" }}
+        onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}>
+        <span style={{ fontSize: 14 }}>{cat.icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 500 }}>{r.label}</div>
+          <div style={{ fontSize: 10, color: "#64748b" }}>{freq?.label} · {r.type === "income" ? "Income" : cat.label}</div>
+        </div>
+        <span style={{ fontSize: 13, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: r.type === "income" ? "#22c55e" : "#f1f5f9" }}>{r.type === "income" ? "+" : "−"}{fmt(r.amount)}</span>
+        <span style={{ fontSize: 10, color: "#475569" }}>✎</span>
+      </div>
+    );
+  };
+
   return (
     <div>
       <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Recurring ({nr.length})</div>
       {nr.length === 0 && !adding && <div style={{ fontSize: 12, color: "#334155", marginBottom: 8 }}>No recurring transactions</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {nr.map(r => { const cat = CATEGORIES.find(c => c.id === r.category) || CATEGORIES[7]; const freq = FREQ.find(f => f.id === r.frequency); return (
-          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 8, borderLeft: `3px solid ${cat.color}` }}>
-            <span style={{ fontSize: 14 }}>{cat.icon}</span>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 500 }}>{r.label}</div><div style={{ fontSize: 10, color: "#64748b" }}>{freq?.label} · {r.type === "income" ? "Income" : cat.label}</div></div>
-            <span style={{ fontSize: 13, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: r.type === "income" ? "#22c55e" : "#f1f5f9" }}>{r.type === "income" ? "+" : "−"}{fmt(r.amount)}</span>
-            <button onClick={() => onRemove(r.id)} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 14, padding: "2px 4px" }} onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")} onMouseLeave={e => (e.currentTarget.style.color = "#475569")}>×</button>
-          </div>
-        ); })}
+        {nr.map(r => (<RecurringRow key={r.id} r={r} />))}
       </div>
       {adding ? (
         <div style={{ marginTop: 8, padding: 12, background: "rgba(255,255,255,0.03)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 8, animation: "slideIn 0.2s ease" }}>
@@ -316,7 +376,7 @@ function LimitsPanel({ nodeId, entries, limits, setLimit, removeLimit }) {
 }
 
 // ── Entry Row with date picker ──
-function EntryRow({ entry, runningBalance, onUpdate, onRemove, isEditing, onStartEdit, onStopEdit }) {
+function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit }) {
   const cat = CATEGORIES.find(c => c.id === entry.category) || CATEGORIES[7];
   const isInc = entry.type === "income";
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
@@ -345,15 +405,24 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, isEditing, onStar
     return (
       <div ref={rRef} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", background: "rgba(255,255,255,0.05)", borderRadius: 10, borderLeft: `3px solid ${cat.color}`, animation: "slideIn 0.2s ease" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {!isInc ? (<select defaultValue={entry.category} onChange={e => onUpdate(entry.id, { category: e.target.value })} style={{ background: "transparent", border: "none", color: cat.color, fontSize: 16, outline: "none", cursor: "pointer", width: 28, padding: 0, appearance: "none", WebkitAppearance: "none", textAlign: "center" }}>{CATEGORIES.filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon}</option>))}</select>) : <span style={{ fontSize: 18, width: 28, textAlign: "center", color: "#22c55e" }}>↑</span>}
+          <span style={{ fontSize: 18, width: 28, textAlign: "center", color: isInc ? "#22c55e" : cat.color }}>{isInc ? "↑" : cat.icon}</span>
           <input ref={lRef} defaultValue={entry.label} placeholder={isInc ? "e.g. Salary" : "e.g. Groceries"} onKeyDown={kd} style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "4px 2px", color: "#e2e8f0", fontSize: 14, outline: "none" }} />
           <div style={{ position: "relative", width: 90 }}><span style={{ position: "absolute", left: 4, top: "50%", transform: "translateY(-50%)", color: "#64748b", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>$</span><input ref={aRef} defaultValue={entry.amount || ""} placeholder="0.00" inputMode="decimal" onKeyDown={kd} style={{ width: "100%", boxSizing: "border-box", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "4px 2px 4px 16px", color: isInc ? "#22c55e" : "#f1f5f9", fontSize: 14, fontFamily: "'JetBrains Mono', monospace", outline: "none", textAlign: "right" }} /></div>
           <button onClick={commit} style={{ background: isInc ? "#22c55e" : "#6366f1", border: "none", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", color: isInc ? "#0a0a1a" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>✓</button>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: 34 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 34, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: "#64748b" }}>Date:</span>
           <input ref={dRef} type="date" defaultValue={entry.dateISO || todayISO()}
             style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: "#e2e8f0", fontSize: 12, outline: "none", colorScheme: "dark" }} />
+          {!isInc && (
+            <>
+              <span style={{ fontSize: 11, color: "#64748b", marginLeft: 4 }}>Category:</span>
+              <select defaultValue={entry.category} onChange={e => onUpdate(entry.id, { category: e.target.value })}
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: "#e2e8f0", fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>
+                {CATEGORIES.filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}
+              </select>
+            </>
+          )}
         </div>
       </div>
     );
@@ -373,6 +442,9 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, isEditing, onStar
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, fontSize: 14, color: isInc ? "#22c55e" : "#f1f5f9" }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
           {runningBalance !== undefined && <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: runningBalance >= 0 ? "rgba(34,197,94,0.5)" : "rgba(239,68,68,0.5)", marginTop: 1 }}>{fmt(runningBalance)}</div>}
         </div>
+        <button onClick={e => { e.stopPropagation(); onDuplicate(entry); }} title="Duplicate"
+          style={{ background: "none", border: "none", color: "#334155", cursor: "pointer", fontSize: 13, padding: "2px 4px", borderRadius: 4, transition: "color 0.15s", flexShrink: 0 }}
+          onMouseEnter={e => (e.currentTarget.style.color = "#818cf8")} onMouseLeave={e => (e.currentTarget.style.color = "#334155")}>❐</button>
       </div>
     </div>
   );
@@ -402,7 +474,7 @@ function DonutChart({ entries }) {
 // ══════════════════════════════════════════════════
 // NODE PAGE
 // ══════════════════════════════════════════════════
-function NodePage({ node, parentName, nodes, entries, recurrings, limits, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, addRecurring, removeRecurring, setLimit, removeLimit }) {
+function NodePage({ node, parentName, nodes, entries, recurrings, limits, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, addRecurring, updateRecurring, removeRecurring, setLimit, removeLimit }) {
   const [addingChild, setAddingChild] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
@@ -487,7 +559,7 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, onBack
         ) : tab === "settings" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <LimitsPanel nodeId={node.id} entries={entries} limits={limits} setLimit={setLimit} removeLimit={removeLimit} />
-            <RecurringPanel nodeId={node.id} recurrings={recurrings} onAdd={addRecurring} onRemove={removeRecurring} onAddEntry={addEntry} />
+            <RecurringPanel nodeId={node.id} recurrings={recurrings} onAdd={addRecurring} onUpdate={updateRecurring} onRemove={removeRecurring} onAddEntry={addEntry} />
             <div>
               <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Import / Export</div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -504,7 +576,7 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, onBack
             <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</div>
             {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {[...filtered].reverse().map(e => (<EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} />))}
+                {[...filtered].reverse().map(e => (<EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={(src) => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} />))}
               </div>
             )}
             <BottomBar>
@@ -539,6 +611,7 @@ export default function App() {
         @keyframes fadeIn{from{opacity:0}to{opacity:1}}
         @keyframes pulse{0%,100%{opacity:0.4}50%{opacity:0.7}}
         input::placeholder,select{color:#475569} select option{background:#1a1a2e;color:#e2e8f0}
+        input,select,textarea{font-size:16px !important;-webkit-text-size-adjust:100%}
         ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
         input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
         .app-shell { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -582,7 +655,7 @@ export default function App() {
   return shell(
     <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} recurrings={d.recurrings} limits={d.limits}
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
-      addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} addRecurring={app.addRecurring} removeRecurring={app.removeRecurring}
+      addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} addRecurring={app.addRecurring} updateRecurring={app.updateRecurring} removeRecurring={app.removeRecurring}
       setLimit={app.setLimit} removeLimit={app.removeLimit} />
   );
 }
