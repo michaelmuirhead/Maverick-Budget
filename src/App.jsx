@@ -691,9 +691,9 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
         </div>
       )}
 
-      <div style={{ padding: "0 20px 120px" }}>
+      <div style={{ padding: "0 0 0", display: "flex", flexDirection: "column", height: "calc(100vh - env(safe-area-inset-top, 0px))", overflow: "hidden" }}>
         {isFolderMode ? (
-          <>
+          <div style={{ padding: "0 20px 120px", flex: 1, overflowY: "auto", overscrollBehavior: "contain" }}>
             {/* Analytics at folder level */}
             <MonthlyTrends entries={allDescEntries} />
             <YearInReview entries={allDescEntries} />
@@ -723,9 +723,9 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
             {addingChild && <div style={{ marginTop: 8 }}><InlineNew placeholder="Sub-budget name" accentColor={color} icon={<div style={{ width: 8 }} />}
               onCommit={name => { addNode({ id: uid(), parentId: node.id, name, color: PALETTE[children.length % PALETTE.length] }); setAddingChild(false); haptic(); }} onCancel={() => setAddingChild(false)} /></div>}
             <BottomBar><Btn onClick={() => setAddingChild(true)} bg={`${color}25`} color={color}>+ New Sub-budget</Btn></BottomBar>
-          </>
+          </div>
         ) : tab === "settings" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ padding: "0 20px 40px", flex: 1, overflowY: "auto", overscrollBehavior: "contain", display: "flex", flexDirection: "column", gap: 20 }}>
             <LimitsPanel nodeId={node.id} entries={entries} limits={limits} setLimit={setLimit} removeLimit={removeLimit} />
             <RecurringPanel nodeId={node.id} recurrings={recurrings} onAdd={addRecurring} onUpdate={updateRecurring} onRemove={removeRecurring} onAddEntry={addEntry} />
             <CategoryManager customCategories={customCategories || []} onAdd={addCategory} onRemove={removeCategory} />
@@ -733,18 +733,22 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
           </div>
         ) : (
           <>
-            <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}><DonutChart entries={directEntries} /></div>
-            {directEntries.length > 3 && <SearchBar value={search} onChange={setSearch} />}
-            <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</div>
-            {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
-              <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
-                <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
-              )} />
-            )}
-            {!editingId && <BottomBar>
-              <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
-              <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
-            </BottomBar>}
+            <div style={{ padding: "0 20px" }}>
+              <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}><DonutChart entries={directEntries} /></div>
+              {directEntries.length > 3 && <SearchBar value={search} onChange={setSearch} />}
+              <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</div>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", overscrollBehavior: "contain", padding: "0 20px", WebkitOverflowScrolling: "touch" }}>
+              {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
+                <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
+                  <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
+                )} />
+              )}
+              <div style={{ display: "flex", gap: 10, padding: "16px 0 24px" }}>
+                <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
+                <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
+              </div>
+            </div>
           </>
         )}
       </div>
