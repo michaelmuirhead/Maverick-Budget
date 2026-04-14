@@ -35,7 +35,7 @@ export async function requestNotificationPermission(userId, householdId) {
 
     // Get FCM token — uses the service worker for push
     const token = await getToken(messaging, {
-      vapidKey: null, // Will be set after you generate one
+      vapidKey: "BAl2XBpMegRmgKa-2pTLnydrY7bozRL8geULzkp8IL7RbAHrWuTo7HJ7ukgEBsch7TC5gg7pHkK-nqT0A2oQPtg",
       serviceWorkerRegistration: await navigator.serviceWorker.getRegistration(),
     });
 
