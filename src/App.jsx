@@ -437,7 +437,7 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, onBack
 
   return (
     <div style={{ animation: "fadeIn 0.3s ease" }}>
-      <div style={{ padding: "16px 20px 0" }}>
+      <div style={{ padding: "24px 20px 0" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
           <button onClick={onBack} style={{ background: "rgba(255,255,255,0.05)", border: "none", color: "#94a3b8", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ {parentName}</button>
           <ColorPicker value={color} onChange={c => updateNode(node.id, { color: c })} />
@@ -532,7 +532,7 @@ export default function App() {
   const goBack = () => setNavStack(navStack.slice(0, -1));
 
   const shell = (ch) => (
-    <div style={{ fontFamily: "'DM Sans', 'Segoe UI', system-ui, sans-serif", background: "linear-gradient(160deg, #0a0a1a 0%, #0f1629 40%, #0a0a1a 100%)", color: "#e2e8f0", minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", overflow: "hidden" }}>
+    <div className="app-shell" style={{ fontFamily: "'DM Sans', 'Segoe UI', system-ui, sans-serif", background: "linear-gradient(160deg, #0a0a1a 0%, #0f1629 40%, #0a0a1a 100%)", color: "#e2e8f0", minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", overflow: "hidden" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
         @keyframes slideIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
@@ -541,6 +541,7 @@ export default function App() {
         input::placeholder,select{color:#475569} select option{background:#1a1a2e;color:#e2e8f0}
         ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
         input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
+        .app-shell { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
       `}</style>
       <div style={{ position: "absolute", top: -120, right: -80, width: 300, height: 300, background: "radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%)", animation: "pulse 6s ease-in-out infinite", pointerEvents: "none" }} />
       {ch}
@@ -551,7 +552,7 @@ export default function App() {
     const roots = d.nodes.filter(n => n.parentId === null);
     const stats = roots.map(f => ({ ...f, ...getNodeBalance(d.nodes, d.entries, f.id), childCount: d.nodes.filter(n => n.parentId === f.id).length }));
     return shell(
-      <div style={{ padding: 20, animation: "fadeIn 0.4s ease" }}>
+      <div style={{ padding: "24px 20px 20px", animation: "fadeIn 0.4s ease" }}>
         <div style={{ marginBottom: 24 }}>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: "-0.02em", background: "linear-gradient(135deg, #e2e8f0, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
           <span style={{ fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
