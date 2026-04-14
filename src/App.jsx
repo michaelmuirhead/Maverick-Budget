@@ -439,8 +439,8 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
   const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
   const onTS = e => { ts.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; setSwiping(false); };
-  const onTM = e => { const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -160)); e.preventDefault(); } };
-  const onTE = () => { if (swipeX < -140) { setSwipeX(-160); haptic(15); setTimeout(() => onRemove(entry.id), 200); } else if (swipeX < -40) { setSwipeX(-160); } else { setSwipeX(0); } setSwiping(false); };
+  const onTM = e => { const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -160)); e.preventDefault(); } else if (Math.abs(dx) > Math.abs(dy) && dx > 0 && swipeX < 0) { setSwiping(true); setSwipeX(Math.min(swipeX + dx, 0)); e.preventDefault(); } };
+  const onTE = () => { if (swipeX < -60) { setSwipeX(-160); } else { setSwipeX(0); } setSwiping(false); };
   useEffect(() => { if (isEditing) setTimeout(() => { lRef.current?.focus(); rRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100); }, [isEditing]);
   const commit = () => { const label = lRef.current?.value?.trim(), amount = parseFloat(aRef.current?.value), dateISO = dRef.current?.value; if (!label && (!amount || amount === 0)) { onRemove(entry.id); } else { const u = { label: label || "(untitled)", amount: amount || 0 }; if (dateISO) { u.dateISO = dateISO; u.date = fmtDate(dateISO); } onUpdate(entry.id, u); } haptic(); onStopEdit(); };
   const kd = e => { if (e.key === "Enter") { if (e.target === lRef.current && aRef.current) aRef.current.focus(); else commit(); } if (e.key === "Escape") { if (!entry.label && entry.amount === 0) onRemove(entry.id); else onStopEdit(); } };
@@ -474,7 +474,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
           Delete
         </button>
       </div>
-      <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onClick={() => { if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
+      <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onClick={() => { if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
         style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: T().row, borderRadius: 10, borderLeft: `3px solid ${cat.color}`, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
         <span style={{ fontSize: 18, width: 28, textAlign: "center", opacity: 0.7 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
