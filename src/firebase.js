@@ -78,6 +78,7 @@ const DEFAULT_NOTIFICATION_PREFS = {
   editTransaction: false,
   deleteTransaction: false,
   budgetUpdate: false,
+  envelopeAlert: true,
 };
 
 export async function getNotificationPrefs(userId) {
