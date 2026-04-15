@@ -130,7 +130,7 @@ function parseCSV(text) {
 }
 
 // ── State with Firebase Sync ──
-import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermission } from "./firebase";
+import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS } from "./firebase";
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
 
@@ -769,6 +769,10 @@ export default function App({ user, householdId }) {
   const [showSettings, setShowSettings] = useState(false);
   const [themeId, setThemeId] = useState(() => { try { return localStorage.getItem("maverick-theme") || "midnight"; } catch { return "midnight"; } });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => typeof Notification !== "undefined" && Notification.permission === "granted");
+  const [notifPrefs, setNotifPrefs] = useState({ ...DEFAULT_NOTIFICATION_PREFS });
+  const [notifPrefsLoaded, setNotifPrefsLoaded] = useState(false);
+  useEffect(() => { if (user?.uid) { getNotificationPrefs(user.uid).then(p => { setNotifPrefs(p); setNotifPrefsLoaded(true); }); } }, [user?.uid]);
+  const toggleNotifPref = async (key) => { const next = { ...notifPrefs, [key]: !notifPrefs[key] }; setNotifPrefs(next); if (user?.uid) await setNotificationPrefs(user.uid, next); };
   const t = THEMES[themeId] || THEMES.midnight;
   window.__THEME__ = themeId;
   const toggleTheme = () => { const next = themeId === "midnight" ? "ocean" : "midnight"; setThemeId(next); try { localStorage.setItem("maverick-theme", next); } catch {} window.__THEME__ = next; };
@@ -825,8 +829,8 @@ export default function App({ user, householdId }) {
               </button>
             </div>
 
-            {/* Notifications */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            {/* Notifications master toggle */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 16 }}>🔔</span>
                 <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Notifications</div><div style={{ fontSize: 10, color: t.textMuted }}>{notificationsEnabled ? "Enabled" : "Disabled"}</div></div>
@@ -835,16 +839,13 @@ export default function App({ user, householdId }) {
                 if (typeof Notification === "undefined") return;
                 if (Notification.permission === "granted") {
                   if (notificationsEnabled) {
-                    // Disabling — remove the FCM token from Firestore so Cloud Functions stop sending
                     try { await deleteDoc(doc(db, "users", user.uid, "tokens", "fcm")); } catch (e) { console.error("Token remove error:", e); }
                     setNotificationsEnabled(false);
                   } else {
-                    // Re-enabling — re-register the FCM token
                     const token = await requestNotificationPermission(user.uid, householdId);
                     setNotificationsEnabled(!!token);
                   }
                 } else {
-                  // First time — request permission and register token
                   const token = await requestNotificationPermission(user.uid, householdId);
                   setNotificationsEnabled(!!token);
                 }
@@ -858,6 +859,30 @@ export default function App({ user, householdId }) {
                 }} />
               </button>
             </div>
+            {/* Notification preferences — only show when notifications are enabled */}
+            {notificationsEnabled && notifPrefsLoaded && (
+              <div style={{ marginLeft: 32, marginBottom: 12 }}>
+                {[
+                  { key: "newTransaction", label: "New transactions", sub: "When someone posts a new entry" },
+                  { key: "editTransaction", label: "Edited transactions", sub: "When someone edits an entry" },
+                  { key: "deleteTransaction", label: "Deleted transactions", sub: "When someone removes an entry" },
+                  { key: "budgetUpdate", label: "Budget changes", sub: "Folders, limits, or categories" },
+                ].map(({ key, label, sub }) => (
+                  <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
+                    <div><div style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{label}</div><div style={{ fontSize: 9, color: t.textMuted }}>{sub}</div></div>
+                    <button onClick={() => toggleNotifPref(key)} style={{
+                      width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
+                      background: notifPrefs[key] ? t.inc : "rgba(255,255,255,0.1)",
+                    }}>
+                      <div style={{
+                        width: 16, height: 16, borderRadius: 8, background: "#fff", position: "absolute", top: 2, transition: "left 0.2s",
+                        left: notifPrefs[key] ? 18 : 2,
+                      }} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Household code */}
             <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>

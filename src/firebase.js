@@ -72,6 +72,34 @@ export function onForegroundMessage(callback) {
   });
 }
 
+// ── Notification Preferences ──
+const DEFAULT_NOTIFICATION_PREFS = {
+  newTransaction: true,
+  editTransaction: false,
+  deleteTransaction: false,
+  budgetUpdate: false,
+};
+
+export async function getNotificationPrefs(userId) {
+  try {
+    const snap = await getDoc(doc(db, "users", userId, "settings", "notifications"));
+    return snap.exists() ? { ...DEFAULT_NOTIFICATION_PREFS, ...snap.data() } : { ...DEFAULT_NOTIFICATION_PREFS };
+  } catch (e) {
+    console.error("Error loading notification prefs:", e);
+    return { ...DEFAULT_NOTIFICATION_PREFS };
+  }
+}
+
+export async function setNotificationPrefs(userId, prefs) {
+  try {
+    await setDoc(doc(db, "users", userId, "settings", "notifications"), prefs);
+  } catch (e) {
+    console.error("Error saving notification prefs:", e);
+  }
+}
+
+export { DEFAULT_NOTIFICATION_PREFS };
+
 export {
   onAuthStateChanged,
   signInWithEmailAndPassword,
