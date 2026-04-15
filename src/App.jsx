@@ -7,6 +7,7 @@ const DEFAULT_CATEGORIES = [
   { id: "transport", label: "Transport", icon: "🚗", color: "#3b82f6" },
   { id: "utilities", label: "Utilities", icon: "⚡", color: "#8b5cf6" },
   { id: "entertainment", label: "Fun", icon: "🎮", color: "#ec4899" },
+  { id: "giving", label: "Giving", icon: "🎁", color: "#f472b6" },
   { id: "savings", label: "Savings", icon: "🏦", color: "#06b6d4" },
   { id: "other", label: "Other", icon: "📋", color: "#f97316" },
 ];
@@ -23,6 +24,7 @@ const KEYWORD_MAP = {
   transport: ["gas", "shell", "exxon", "chevron", "bp", "fuel", "uber", "lyft", "parking", "toll", "car wash", "auto", "mechanic", "oil change", "tire", "car payment", "car insurance", "vehicle", "transit", "metro", "bus pass"],
   utilities: ["electric", "electricity", "power", "water", "gas bill", "internet", "wifi", "phone bill", "cell phone", "verizon", "att", "t-mobile", "sprint", "comcast", "xfinity", "duke energy", "utility", "sewer", "trash", "waste"],
   entertainment: ["netflix", "hulu", "disney", "spotify", "apple music", "youtube", "hbo", "amazon prime", "movie", "theater", "concert", "game", "steam", "playstation", "xbox", "nintendo", "subscription", "fun", "entertainment", "bowling", "arcade", "bar", "drinks"],
+  giving: ["tithe", "tithes", "tithe", "offering", "donation", "donate", "charity", "church", "giving", "gift", "missionary", "missions"],
   savings: ["savings", "invest", "investment", "401k", "ira", "roth", "stock", "crypto", "emergency fund", "transfer to savings", "deposit"],
   income: ["paycheck", "salary", "direct deposit", "wage", "bonus", "freelance", "commission", "refund", "reimbursement", "dividend", "interest", "income", "side hustle", "payment received"],
 };
@@ -188,8 +190,15 @@ function useApp(user, householdId) {
     removeLimit: useCallback(k => up(p => { const l = { ...(p.limits||{}) }; delete l[k]; return { ...p, limits: l }; }), []),
     addCategory: useCallback(c => up(p => ({ ...p, customCategories: [...(p.customCategories||[]), c] })), []),
     removeCategory: useCallback(id => up(p => ({ ...p, customCategories: (p.customCategories||[]).filter(c => c.id !== id) })), []),
-    setEnvelope: useCallback((nodeId, env) => up(p => ({ ...p, envelopes: { ...(p.envelopes||{}), [nodeId]: env } })), []),
-    removeEnvelope: useCallback(nodeId => up(p => { const e = { ...(p.envelopes||{}) }; delete e[nodeId]; return { ...p, envelopes: e }; }), []),
+    setEnvelope: useCallback((nodeId, categoryId, cap) => up(p => ({
+      ...p, envelopes: { ...(p.envelopes||{}), [nodeId]: { ...((p.envelopes||{})[nodeId]||{}), [categoryId]: { cap } } }
+    })), []),
+    removeEnvelope: useCallback((nodeId, categoryId) => up(p => {
+      const nodeEnvs = { ...((p.envelopes||{})[nodeId]||{}) }; delete nodeEnvs[categoryId];
+      const envs = { ...(p.envelopes||{}) };
+      if (Object.keys(nodeEnvs).length === 0) delete envs[nodeId]; else envs[nodeId] = nodeEnvs;
+      return { ...p, envelopes: envs };
+    }), []),
     getDesc,
   };
 }
@@ -666,355 +675,151 @@ function Collapsible({ title, count, defaultOpen, children }) {
   );
 }
 
-// ── Rolled Badge ──
-function RolledBadge({ amount, target }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 6,
-      padding: "6px 10px",
-      background: "rgba(34,197,94,0.08)",
-      border: "1px solid rgba(34,197,94,0.15)",
-      borderRadius: 8,
-      marginTop: 10,
-    }}>
-      <span style={{ fontSize: 12 }}>✓</span>
-      <span style={{ fontSize: 11, color: T().inc, fontWeight: 600 }}>
-        {fmt(amount)} → {target}
-      </span>
-      <span style={{ fontSize: 10, color: T().textMuted, marginLeft: "auto" }}>Rolled forward</span>
-    </div>
-  );
-}
+// ── Envelope Section (category-based envelopes for a budget node) ──
+function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelope }) {
+  const nodeEnvs = (envelopes || {})[nodeId] || {};
+  const catIds = Object.keys(nodeEnvs);
+  const cats = allCats();
+  const [adding, setAdding] = useState(false);
+  const [addCat, setAddCat] = useState("");
+  const [addCap, setAddCap] = useState("");
+  const [editingCat, setEditingCat] = useState(null);
+  const [editCap, setEditCap] = useState("");
 
-// ── Roll Confirm Dialog ──
-function RollConfirm({ name, amount, target, onConfirm, onCancel }) {
-  return (
-    <div style={{
-      background: "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
-      border: `1px solid ${T().cardBorder}`,
-      borderRadius: 14,
-      padding: "16px 18px",
-      marginTop: 10,
-      animation: "slideIn 0.2s ease",
-    }}>
-      <div style={{ fontSize: 13, color: T().text, fontWeight: 600, marginBottom: 8 }}>Roll forward to {target}?</div>
-      <div style={{ fontSize: 12, color: T().textMuted, marginBottom: 12, lineHeight: 1.5 }}>
-        This will add <span style={{ color: T().inc, fontWeight: 600, fontFamily: T().mono }}>{fmt(amount)}</span> from
-        {" "}<span style={{ color: T().text, fontWeight: 500 }}>{name}</span> to {target}'s envelope as rollover.
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={onConfirm} style={{
-          flex: 1, padding: "10px 0", borderRadius: 8, border: "none",
-          background: T().inc, color: "#0a0a1a", fontSize: 12, fontWeight: 700, cursor: "pointer",
-        }}>Roll {fmt(amount)} → {target}</button>
-        <button onClick={onCancel} style={{
-          padding: "10px 16px", borderRadius: 8, border: `1px solid ${T().cardBorder}`,
-          background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}>Cancel</button>
-      </div>
-    </div>
-  );
-}
+  // Categories that already have an envelope
+  const envRows = catIds.map(catId => {
+    const cat = cats.find(c => c.id === catId) || { id: catId, label: catId, icon: "📋", color: "#f97316" };
+    const cap = nodeEnvs[catId]?.cap || 0;
+    const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense").reduce((s, e) => s + e.amount, 0);
+    const left = cap - spent;
+    const pct = cap > 0 ? Math.min((spent / cap) * 100, 100) : 0;
+    return { catId, cat, cap, spent, left, pct, isOver: spent > cap };
+  });
 
-// ── Envelope Summary (folder-level budget home) ──
-function EnvelopeSummary({ childNodes, envelopes, entries, parentName }) {
-  const envData = childNodes.map(c => {
-    const env = envelopes[c.id];
-    if (!env || !env.cap) return null;
-    const spent = entries.filter(e => e.nodeId === c.id && e.type === "expense").reduce((s, e) => s + e.amount, 0);
-    return { ...env, name: c.name, color: c.color || "#6366f1", spent, nodeId: c.id };
-  }).filter(Boolean);
+  // Categories available to add (not already enveloped, skip income)
+  const availableCats = cats.filter(c => c.id !== "income" && !catIds.includes(c.id));
 
-  if (envData.length === 0) return null;
-
-  const totalBudget = envData.reduce((s, e) => s + e.cap + (e.rollover || 0), 0);
-  const totalSpent = envData.reduce((s, e) => s + e.spent, 0);
+  const totalBudget = envRows.reduce((s, r) => s + r.cap, 0);
+  const totalSpent = envRows.reduce((s, r) => s + r.spent, 0);
   const totalLeft = totalBudget - totalSpent;
+
+  const handleAdd = () => {
+    const v = parseFloat(addCap);
+    if (addCat && v > 0) {
+      setEnvelope(nodeId, addCat, v);
+      setAddCat(""); setAddCap(""); setAdding(false);
+    }
+  };
+
+  const handleEdit = (catId) => {
+    const v = parseFloat(editCap);
+    if (v > 0) { setEnvelope(nodeId, catId, v); }
+    setEditingCat(null); setEditCap("");
+  };
 
   return (
     <div style={{
       background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
       border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14,
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: envRows.length > 0 ? 10 : 0 }}>
         <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em" }}>
-          Envelopes · {parentName}
+          Envelopes
         </div>
-        <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T().mono, color: totalLeft >= 0 ? T().inc : T().exp }}>
-          {fmt(Math.abs(totalLeft))} <span style={{ fontSize: 10, fontWeight: 500, color: T().textMuted }}>{totalLeft >= 0 ? "left" : "over"}</span>
-        </div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {envData.map((env, i) => {
-          const total = env.cap + (env.rollover || 0);
-          const pct = Math.min((env.spent / total) * 100, 100);
-          const left = total - env.spent;
-          const isOver = env.spent > total;
-          const isRolled = !!env.rolledTo;
-          return (
-            <div key={env.nodeId}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: 2, background: env.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, color: T().text, fontWeight: 500 }}>{env.name}</span>
-                  {isRolled && (
-                    <span style={{ fontSize: 9, color: T().inc, fontWeight: 600, background: "rgba(34,197,94,0.1)", padding: "1px 5px", borderRadius: 4 }}>
-                      ✓ {fmt(env.rolledAmount)} rolled
-                    </span>
-                  )}
-                  {!isRolled && <span style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{fmt(env.spent)} / {fmt(total)}</span>}
-                </div>
-                <span style={{ fontSize: 11, fontFamily: T().mono, fontWeight: 600, color: isOver ? T().exp : T().textSub }}>
-                  {isOver ? "−" : ""}{fmt(Math.abs(left))}
-                </span>
-              </div>
-              <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
-                <div style={{
-                  height: "100%", width: `${pct}%`,
-                  background: isRolled ? T().textDim : getBarColor(pct),
-                  borderRadius: 3, transition: "width 0.4s ease", opacity: isRolled ? 0.5 : 1,
-                }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Full Envelope Card (sub-budget drill-in) ──
-function EnvelopeCard({ node, envelope, entries, nodes, parentName, setEnvelope, onEdit, allEnvelopes }) {
-  const env = envelope || {};
-  const cap = env.cap || 0;
-  const rollover = env.rollover || 0;
-  const total = cap + rollover;
-  const spent = entries.filter(e => e.nodeId === node.id && e.type === "expense").reduce((s, e) => s + e.amount, 0);
-  const left = total - spent;
-  const pctUsed = total > 0 ? Math.min((spent / total) * 100, 100) : 0;
-  const barColor = getBarColor(pctUsed);
-  const isOver = spent > total;
-  const isRolled = !!env.rolledTo;
-  const dLeft = daysLeftInMonth();
-  const dayOfMonth = currentDayOfMonth();
-  const totalDays = daysInCurrentMonth();
-  const dailyBudget = left > 0 && dLeft > 0 ? (left / dLeft).toFixed(2) : "0.00";
-  const canRoll = left > 0 && !isRolled && cap > 0;
-  const color = node.color || "#6366f1";
-
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [showSetup, setShowSetup] = useState(false);
-  const [capInput, setCapInput] = useState(String(cap || ""));
-
-  // Find next month's matching sub-budget for roll-forward
-  const findRollTarget = () => {
-    const parent = nodes.find(n => n.id === node.parentId);
-    if (!parent) return null;
-    const grandparent = nodes.find(n => n.id === parent.parentId);
-    if (!grandparent) return null;
-    const siblings = nodes.filter(n => n.parentId === grandparent.id);
-    const parentIdx = siblings.findIndex(s => s.id === parent.id);
-    if (parentIdx < 0 || parentIdx >= siblings.length - 1) return null;
-    const nextMonth = siblings[parentIdx + 1];
-    const matchingChild = nodes.find(n => n.parentId === nextMonth.id && n.name === node.name);
-    return matchingChild ? { node: matchingChild, monthName: nextMonth.name } : null;
-  };
-
-  const rollTarget = canRoll ? findRollTarget() : null;
-
-  const handleRoll = () => {
-    if (!rollTarget) return;
-    // Update source: mark as rolled
-    setEnvelope(node.id, { ...env, rolledTo: rollTarget.node.id, rolledAmount: left });
-    // Update destination: add rollover amount to existing envelope (or create one)
-    const destEnv = (allEnvelopes || {})[rollTarget.node.id] || {};
-    setEnvelope(rollTarget.node.id, {
-      cap: destEnv.cap || env.cap, // inherit cap if destination doesn't have one
-      rollover: (destEnv.rollover || 0) + left,
-      rolloverFrom: node.id,
-      rolledTo: destEnv.rolledTo || null,
-      rolledAmount: destEnv.rolledAmount || 0,
-    });
-    setShowConfirm(false);
-  };
-
-  const handleSetCap = () => {
-    const v = parseFloat(capInput);
-    if (v > 0) {
-      setEnvelope(node.id, { ...(envelope || {}), cap: v, rollover: env.rollover || 0, rolloverFrom: env.rolloverFrom || null, rolledTo: env.rolledTo || null, rolledAmount: env.rolledAmount || 0 });
-    }
-    setShowSetup(false);
-  };
-
-  if (!cap || cap <= 0) {
-    return (
-      <div style={{
-        background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
-        border: `1px dashed ${T().cardBorder}`, borderRadius: 16,
-        padding: "16px 18px", marginBottom: 12, borderTop: `3px solid ${color}`,
-      }}>
-        {!showSetup ? (
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 12, color: T().textMuted, marginBottom: 8 }}>No envelope set for this budget</div>
-            <button onClick={() => setShowSetup(true)} style={{
-              padding: "10px 20px", borderRadius: 8, border: `1px dashed ${T().accent}40`,
-              background: `${T().accent}10`, color: T().accentLight, fontSize: 12, fontWeight: 600, cursor: "pointer",
-            }}>+ Set Envelope Budget</button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, animation: "slideIn 0.2s ease" }}>
-            <div style={{ fontSize: 12, color: T().text, fontWeight: 600 }}>Monthly envelope cap</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <div style={{ position: "relative", flex: 1 }}>
-                <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 14, fontFamily: T().mono }}>$</span>
-                <input value={capInput} onChange={e => setCapInput(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0.00" inputMode="decimal"
-                  style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "10px 10px 10px 24px", color: T().text, fontSize: 14, fontFamily: T().mono, outline: "none" }} />
-              </div>
-              <button onClick={handleSetCap} style={{ padding: "10px 16px", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Set</button>
-              <button onClick={() => setShowSetup(false)} style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 12, cursor: "pointer" }}>Cancel</button>
-            </div>
+        {envRows.length > 0 && (
+          <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T().mono, color: totalLeft >= 0 ? T().inc : T().exp }}>
+            {fmt(Math.abs(totalLeft))} <span style={{ fontSize: 10, fontWeight: 500, color: T().textMuted }}>{totalLeft >= 0 ? "left" : "over"}</span>
           </div>
         )}
       </div>
-    );
-  }
 
-  return (
-    <div style={{
-      background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
-      border: `1px solid ${T().cardBorder}`, borderRadius: 16,
-      padding: "16px 18px", marginBottom: 12,
-      borderTop: `3px solid ${color}`,
-      opacity: isRolled ? 0.75 : 1,
-    }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-        <div>
-          <div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 2 }}>
-            Envelope · {parentName}
-          </div>
-          <div style={{ fontSize: 26, fontWeight: 700, fontFamily: T().mono, color: isOver ? T().exp : T().inc, letterSpacing: "-0.02em" }}>
-            {isOver ? "−" : ""}{fmt(Math.abs(left))}
-            <span style={{ fontSize: 12, fontWeight: 500, color: T().textMuted, marginLeft: 6 }}>
-              {isOver ? "over budget" : "remaining"}
-            </span>
-          </div>
-        </div>
-        <button onClick={onEdit} style={{
-          background: `${T().accent}15`, border: `1px solid ${T().accent}30`, borderRadius: 8,
-          padding: "5px 10px", cursor: "pointer", fontSize: 10, fontWeight: 600, color: T().accentLight,
-        }}>✎ Edit</button>
-      </div>
-
-      {/* Progress bar */}
-      <div style={{ height: 8, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden", marginBottom: 10, position: "relative" }}>
-        <div style={{
-          height: "100%", width: `${pctUsed}%`,
-          background: isRolled ? T().textDim : `linear-gradient(90deg, ${barColor}cc, ${barColor})`,
-          borderRadius: 4, opacity: isRolled ? 0.5 : 1,
-        }} />
-        <div style={{ position: "absolute", left: `${(dayOfMonth / totalDays) * 100}%`, top: -2, bottom: -2, width: 2, background: "rgba(255,255,255,0.3)", borderRadius: 1 }} />
-      </div>
-
-      {/* Stats */}
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Budget</div><div style={{ fontSize: 13, fontWeight: 600, color: T().text, fontFamily: T().mono, marginTop: 1 }}>{fmt(cap)}</div></div>
-        {rollover > 0 && <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Rollover</div><div style={{ fontSize: 13, fontWeight: 600, color: T().accentLight, fontFamily: T().mono, marginTop: 1 }}>+{fmt(rollover)}</div></div>}
-        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Spent</div><div style={{ fontSize: 13, fontWeight: 600, color: T().exp, fontFamily: T().mono, marginTop: 1 }}>{fmt(spent)}</div></div>
-        {!isRolled && !isOver && <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Per Day</div><div style={{ fontSize: 13, fontWeight: 600, color: T().textSub, fontFamily: T().mono, marginTop: 1 }}>${dailyBudget}</div></div>}
-      </div>
-
-      {/* Rolled badge */}
-      {isRolled && <RolledBadge amount={env.rolledAmount} target={rollTarget ? rollTarget.monthName : "Next month"} />}
-
-      {/* Roll forward button */}
-      {canRoll && rollTarget && !showConfirm && (
-        <button onClick={() => setShowConfirm(true)} style={{
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          width: "100%", marginTop: 12, padding: "10px 0", borderRadius: 8,
-          border: "1px dashed rgba(34,197,94,0.3)",
-          background: "rgba(34,197,94,0.04)",
-          color: T().inc, fontSize: 12, fontWeight: 600, cursor: "pointer",
-          transition: "all 0.2s",
-        }}>
-          <span>Roll forward {fmt(left)} → {rollTarget.monthName}</span>
-          <span style={{ fontSize: 14 }}>→</span>
-        </button>
-      )}
-
-      {/* Overspent — nothing to roll */}
-      {isOver && !isRolled && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 6,
-          padding: "8px 10px", marginTop: 10,
-          background: "rgba(239,68,68,0.06)",
-          border: "1px solid rgba(239,68,68,0.12)",
-          borderRadius: 8,
-        }}>
-          <span style={{ fontSize: 12 }}>⚠</span>
-          <span style={{ fontSize: 11, color: T().exp, fontWeight: 500 }}>Overspent — next month starts fresh at {fmt(cap)}</span>
+      {/* Envelope rows */}
+      {envRows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 10 }}>
+          {envRows.map(({ catId, cat, cap, spent, left, pct, isOver }) => (
+            <div key={catId}>
+              {editingCat === catId ? (
+                /* ── Inline edit mode ── */
+                <div style={{ display: "flex", gap: 6, alignItems: "center", animation: "slideIn 0.15s ease" }}>
+                  <span style={{ fontSize: 14, width: 22, textAlign: "center" }}>{cat.icon}</span>
+                  <span style={{ fontSize: 12, color: T().text, fontWeight: 500, minWidth: 50 }}>{cat.label}</span>
+                  <div style={{ position: "relative", flex: 1 }}>
+                    <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span>
+                    <input value={editCap} onChange={e => setEditCap(e.target.value.replace(/[^0-9.]/g, ""))} autoFocus inputMode="decimal"
+                      onKeyDown={e => { if (e.key === "Enter") handleEdit(catId); if (e.key === "Escape") setEditingCat(null); }}
+                      style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 6, padding: "6px 6px 6px 22px", color: T().text, fontSize: 12, fontFamily: T().mono, outline: "none" }} />
+                  </div>
+                  <button onClick={() => handleEdit(catId)} style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: T().accent, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Save</button>
+                  <button onClick={() => setEditingCat(null)} style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 11, cursor: "pointer" }}>✕</button>
+                </div>
+              ) : (
+                /* ── Display mode ── */
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 }}>{cat.icon}</span>
+                      <span style={{ fontSize: 12, color: T().text, fontWeight: 500 }}>{cat.label}</span>
+                      <span style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{fmt(spent)} / {fmt(cap)}</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                      <span style={{ fontSize: 11, fontFamily: T().mono, fontWeight: 600, color: isOver ? T().exp : T().textSub }}>
+                        {isOver ? "−" : ""}{fmt(Math.abs(left))}
+                      </span>
+                      <button onClick={() => { setEditingCat(catId); setEditCap(String(cap)); }} title="Edit" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 11, padding: "2px 4px" }}>✎</button>
+                      <button onClick={() => { removeEnvelope(nodeId, catId); }} title="Delete" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}
+                        onMouseEnter={e => (e.currentTarget.style.color = T().exp)} onMouseLeave={e => (e.currentTarget.style.color = T().textDim)}>×</button>
+                    </div>
+                  </div>
+                  <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: getBarColor(pct), borderRadius: 3, transition: "width 0.4s ease" }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Confirmation dialog */}
-      {showConfirm && rollTarget && (
-        <RollConfirm
-          name={node.name}
-          amount={left}
-          target={rollTarget.monthName}
-          onConfirm={handleRoll}
-          onCancel={() => setShowConfirm(false)}
-        />
+      {/* Add envelope form */}
+      {adding ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, animation: "slideIn 0.15s ease", marginTop: envRows.length > 0 ? 4 : 10 }}>
+          <select value={addCat} onChange={e => setAddCat(e.target.value)} style={{
+            background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px",
+            color: T().text, fontSize: 12, outline: "none", appearance: "auto",
+          }}>
+            <option value="">Select category...</option>
+            {availableCats.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+          </select>
+          {addCat && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ position: "relative", flex: 1 }}>
+                <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 13, fontFamily: T().mono }}>$</span>
+                <input value={addCap} onChange={e => setAddCap(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="Monthly cap" autoFocus inputMode="decimal"
+                  onKeyDown={e => { if (e.key === "Enter") handleAdd(); }}
+                  style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 8px 8px 24px", color: T().text, fontSize: 13, fontFamily: T().mono, outline: "none" }} />
+              </div>
+              <button onClick={handleAdd} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Add</button>
+              <button onClick={() => { setAdding(false); setAddCat(""); setAddCap(""); }} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 12, cursor: "pointer" }}>✕</button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} style={{
+          display: "block", width: "100%", padding: "8px 0", borderRadius: 8,
+          border: `1px dashed ${T().accent}40`, background: `${T().accent}08`,
+          color: T().accentLight, fontSize: 11, fontWeight: 600, cursor: "pointer",
+          marginTop: envRows.length > 0 ? 0 : 10,
+        }}>+ Add Envelope</button>
       )}
     </div>
   );
 }
 
-// ── Envelope Settings (in Limits & Recurring tab) ──
-function EnvelopeSettings({ nodeId, envelope, setEnvelope, removeEnvelope }) {
-  const env = envelope || {};
-  const [editing, setEditing] = useState(false);
-  const [capVal, setCapVal] = useState(String(env.cap || ""));
-
-  const save = () => {
-    const v = parseFloat(capVal);
-    if (v > 0) {
-      setEnvelope(nodeId, { cap: v, rollover: env.rollover || 0, rolloverFrom: env.rolloverFrom || null, rolledTo: env.rolledTo || null, rolledAmount: env.rolledAmount || 0 });
-    } else {
-      removeEnvelope(nodeId);
-    }
-    setEditing(false);
-  };
-
-  return (
-    <div>
-      <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Envelope Budget</div>
-      {env.cap > 0 && !editing ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: T().surface, borderRadius: 10, border: `1px solid ${T().cardBorder}` }}>
-          <div>
-            <div style={{ fontSize: 13, color: T().text, fontWeight: 600 }}>Monthly cap: <span style={{ fontFamily: T().mono, color: T().inc }}>{fmt(env.cap)}</span></div>
-            {env.rollover > 0 && <div style={{ fontSize: 11, color: T().accentLight, marginTop: 2 }}>+ {fmt(env.rollover)} rollover</div>}
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => { setCapVal(String(env.cap)); setEditing(true); }} style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${T().accent}30`, background: `${T().accent}10`, color: T().accentLight, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Edit</button>
-            <button onClick={() => { removeEnvelope(nodeId); haptic(); }} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.2)", background: "rgba(239,68,68,0.06)", color: "#ef4444", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Remove</button>
-          </div>
-        </div>
-      ) : editing || !env.cap ? (
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ position: "relative", flex: 1 }}>
-            <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 13, fontFamily: T().mono }}>$</span>
-            <input value={capVal} onChange={e => setCapVal(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="Monthly cap" inputMode="decimal"
-              style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px 8px 24px", color: T().text, fontSize: 13, fontFamily: T().mono, outline: "none" }} />
-          </div>
-          <button onClick={save} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            {env.cap > 0 ? "Update" : "Set Cap"}
-          </button>
-          {editing && <button onClick={() => setEditing(false)} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 12, cursor: "pointer" }}>Cancel</button>}
-        </div>
-      ) : null}
-    </div>
-  );
+// ── Envelope Settings (in Limits & Recurring tab) — now just a pointer ──
+function EnvelopeSettings({ nodeId, envelopes, setEnvelope, removeEnvelope }) {
+  // Full envelope management in the settings tab too
+  return <EnvelopeSection nodeId={nodeId} envelopes={envelopes} entries={[]} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />;
 }
 
 // ══════════════════════════════════════════════════
@@ -1063,16 +868,13 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
 
         {!isFolderMode && (
           <>
-            {/* Envelope card — shows full envelope if cap is set, or setup prompt if not */}
-            <EnvelopeCard
-              node={node}
-              envelope={(envelopes || {})[node.id] || null}
+            {/* Envelope section — category-based envelopes with progress bars */}
+            <EnvelopeSection
+              nodeId={node.id}
+              envelopes={envelopes}
               entries={entries}
-              nodes={nodes}
-              parentName={parentName}
               setEnvelope={setEnvelope}
-              onEdit={() => setTab("settings")}
-              allEnvelopes={envelopes || {}}
+              removeEnvelope={removeEnvelope}
             />
             <BudgetAlerts nodeId={node.id} entries={entries} limits={limits} />
           </>
@@ -1122,7 +924,7 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
         ) : tab === "settings" ? (
           <div style={{ padding: "0 20px 40px", flex: 1, overflowY: "auto", overscrollBehavior: "contain", display: "flex", flexDirection: "column", gap: 20 }}>
             {/* Envelope config */}
-            <EnvelopeSettings nodeId={node.id} envelope={(envelopes || {})[node.id]} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />
+            <EnvelopeSettings nodeId={node.id} envelopes={envelopes} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />
             <LimitsPanel nodeId={node.id} entries={entries} limits={limits} setLimit={setLimit} removeLimit={removeLimit} />
             <RecurringPanel nodeId={node.id} recurrings={recurrings} onAdd={addRecurring} onUpdate={updateRecurring} onRemove={removeRecurring} onAddEntry={addEntry} />
             <CategoryManager customCategories={customCategories || []} onAdd={addCategory} onRemove={removeCategory} />
