@@ -13,7 +13,43 @@ const DEFAULT_PREFS = {
   editTransaction: false,
   deleteTransaction: false,
   budgetUpdate: false,
+  envelopeAlert: true,
 };
+
+// Check envelope thresholds and return alerts
+function checkEnvelopeAlerts(beforeData, afterData) {
+  const envelopes = afterData?.envelopes || {};
+  const beforeEnvelopes = beforeData?.envelopes || {};
+  const entries = afterData?.entries || [];
+  const nodes = afterData?.nodes || [];
+  const alerts = [];
+
+  for (const [nodeId, env] of Object.entries(envelopes)) {
+    if (!env || !env.cap || env.cap <= 0) continue;
+    const total = env.cap + (env.rollover || 0);
+    const spent = entries.filter(e => e.nodeId === nodeId && e.type === "expense")
+      .reduce((s, e) => s + e.amount, 0);
+    const pct = (spent / total) * 100;
+    const node = nodes.find(n => n.id === nodeId);
+    const name = node ? node.name : "Budget";
+
+    // Check if we just crossed a threshold (compare with before state)
+    const beforeSpent = (beforeData?.entries || [])
+      .filter(e => e.nodeId === nodeId && e.type === "expense")
+      .reduce((s, e) => s + e.amount, 0);
+    const beforePct = total > 0 ? (beforeSpent / total) * 100 : 0;
+
+    const amount = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(spent);
+    const cap = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total);
+
+    if (pct >= 100 && beforePct < 100) {
+      alerts.push({ type: "envelopeAlert", message: `${name} envelope exceeded: ${amount} of ${cap} (${Math.round(pct)}%)` });
+    } else if (pct >= 80 && beforePct < 80) {
+      alerts.push({ type: "envelopeAlert", message: `${name} envelope at ${Math.round(pct)}%: ${amount} of ${cap}` });
+    }
+  }
+  return alerts;
+}
 
 // Determine what actually changed and whether it's notification-worthy
 function classifyChange(beforeData, afterData) {
@@ -119,7 +155,9 @@ exports.onBudgetUpdate = onDocumentWritten(
 
     // Classify the change — returns null if not notification-worthy
     const change = classifyChange(beforeData, afterData);
-    if (!change) {
+    const envelopeAlerts = checkEnvelopeAlerts(beforeData, afterData);
+
+    if (!change && envelopeAlerts.length === 0) {
       console.log(`Skipping notification — no meaningful change for household ${householdId}`);
       return;
     }
@@ -171,45 +209,73 @@ exports.onBudgetUpdate = onDocumentWritten(
         : DEFAULT_PREFS;
 
       // Only send if this change type is enabled for this recipient
-      if (!prefs[change.type]) {
-        console.log(`Skipping ${change.type} notification for ${uid} — disabled in preferences`);
+      // For envelope alerts, always send (they're important threshold warnings)
+      const hasChange = change && prefs[change.type];
+      const hasEnvelopeAlert = envelopeAlerts.length > 0;
+      if (!hasChange && !hasEnvelopeAlert) {
+        console.log(`Skipping notification for ${uid} — disabled in preferences`);
         continue;
       }
 
-      tokenEntries.push({ token: tokenData.token, uid });
+      tokenEntries.push({ token: tokenData.token, uid, sendChange: hasChange, sendEnvelope: hasEnvelopeAlert });
     }
 
     if (tokenEntries.length === 0) {
-      console.log(`No eligible recipients for ${change.type} in household ${householdId}`);
+      console.log(`No eligible recipients for household ${householdId}`);
       return;
     }
 
-    // Send push to each device
+    // Send push to each device — may send multiple messages (change + envelope alert)
     const shortEmail = updatedBy.split("@")[0];
-    const results = await Promise.allSettled(
-      tokenEntries.map(({ token }) =>
-        messaging.send({
-          token,
-          notification: {
-            title: "Maverick Budget",
-            body: `${shortEmail} ${change.message}`,
-          },
-          webpush: {
-            fcmOptions: {
-              link: "/",
-            },
+    const sendPromises = [];
+    for (const entry of tokenEntries) {
+      if (entry.sendChange && change) {
+        sendPromises.push(
+          messaging.send({
+            token: entry.token,
             notification: {
-              icon: "/icon-192.png",
-              badge: "/icon-192.png",
-              tag: `maverick-${change.type}`,
-              renotify: true,
+              title: "Maverick Budget",
+              body: `${shortEmail} ${change.message}`,
             },
-          },
-        })
-      )
-    );
+            webpush: {
+              fcmOptions: { link: "/" },
+              notification: {
+                icon: "/icon-192.png",
+                badge: "/icon-192.png",
+                tag: `maverick-${change.type}`,
+                renotify: true,
+              },
+            },
+          }).then(() => ({ uid: entry.uid, type: change.type }))
+        );
+      }
+      if (entry.sendEnvelope) {
+        for (const alert of envelopeAlerts) {
+          sendPromises.push(
+            messaging.send({
+              token: entry.token,
+              notification: {
+                title: "Maverick Budget — Envelope Alert",
+                body: alert.message,
+              },
+              webpush: {
+                fcmOptions: { link: "/" },
+                notification: {
+                  icon: "/icon-192.png",
+                  badge: "/icon-192.png",
+                  tag: "maverick-envelopeAlert",
+                  renotify: true,
+                },
+              },
+            }).then(() => ({ uid: entry.uid, type: "envelopeAlert" }))
+          );
+        }
+      }
+    }
+    const results = await Promise.allSettled(sendPromises);
 
     // Clean up any invalid tokens
+    const staleUids = new Set();
     for (let i = 0; i < results.length; i++) {
       if (results[i].status === "rejected") {
         const err = results[i].reason;
@@ -217,21 +283,25 @@ exports.onBudgetUpdate = onDocumentWritten(
           err?.code === "messaging/registration-token-not-registered" ||
           err?.code === "messaging/invalid-registration-token"
         ) {
-          const staleUid = tokenEntries[i].uid;
-          console.log("Removing invalid token for member:", staleUid);
-          await db
-            .collection("users")
-            .doc(staleUid)
-            .collection("tokens")
-            .doc("fcm")
-            .delete()
-            .catch((e) => console.error("Token cleanup failed:", e));
+          // Find which tokenEntry this corresponds to
+          const entry = tokenEntries.find(te => !staleUids.has(te.uid));
+          if (entry) {
+            staleUids.add(entry.uid);
+            console.log("Removing invalid token for member:", entry.uid);
+            await db
+              .collection("users")
+              .doc(entry.uid)
+              .collection("tokens")
+              .doc("fcm")
+              .delete()
+              .catch((e) => console.error("Token cleanup failed:", e));
+          }
         }
       }
     }
 
     console.log(
-      `Sent ${results.filter((r) => r.status === "fulfilled").length} ${change.type} notifications for household ${householdId}`
+      `Sent ${results.filter((r) => r.status === "fulfilled").length} notifications for household ${householdId}`
     );
   }
 );
