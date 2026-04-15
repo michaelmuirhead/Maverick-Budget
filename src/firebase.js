@@ -34,9 +34,11 @@ export async function requestNotificationPermission(userId, householdId) {
     if (permission !== "granted") return null;
 
     // Get FCM token — uses the service worker for push
+    // Wait for the service worker to be ready (not just registered) to avoid race condition
+    const swRegistration = await navigator.serviceWorker.ready;
     const token = await getToken(messaging, {
       vapidKey: "BAl2XBpMegRmgKa-2pTLnydrY7bozRL8geULzkp8IL7RbAHrWuTo7HJ7ukgEBsch7TC5gg7pHkK-nqT0A2oQPtg",
-      serviceWorkerRegistration: await navigator.serviceWorker.getRegistration(),
+      serviceWorkerRegistration: swRegistration,
     });
 
     if (token) {

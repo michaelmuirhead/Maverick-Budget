@@ -130,8 +130,9 @@ function parseCSV(text) {
 }
 
 // ── State with Firebase Sync ──
-import { db, auth, signOut, doc, setDoc, onSnapshot } from "./firebase";
+import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermission } from "./firebase";
 import NotificationManager from "./NotificationManager";
+import { deleteDoc } from "firebase/firestore";
 
 const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [] };
 
@@ -790,6 +791,7 @@ export default function App({ user, householdId }) {
         .app-shell{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
       `}</style>
       <div style={{ position: "absolute", top: -120, right: -80, width: 300, height: 300, background: t.glow, animation: "pulse 6s ease-in-out infinite", pointerEvents: "none" }} />
+      <NotificationManager userId={user.uid} householdId={householdId} />
       <ScrollContainer>{ch}</ScrollContainer>
     </div>
   );
@@ -832,10 +834,19 @@ export default function App({ user, householdId }) {
               <button onClick={async () => {
                 if (typeof Notification === "undefined") return;
                 if (Notification.permission === "granted") {
-                  setNotificationsEnabled(!notificationsEnabled);
+                  if (notificationsEnabled) {
+                    // Disabling — remove the FCM token from Firestore so Cloud Functions stop sending
+                    try { await deleteDoc(doc(db, "users", user.uid, "tokens", "fcm")); } catch (e) { console.error("Token remove error:", e); }
+                    setNotificationsEnabled(false);
+                  } else {
+                    // Re-enabling — re-register the FCM token
+                    const token = await requestNotificationPermission(user.uid, householdId);
+                    setNotificationsEnabled(!!token);
+                  }
                 } else {
-                  const perm = await Notification.requestPermission();
-                  setNotificationsEnabled(perm === "granted");
+                  // First time — request permission and register token
+                  const token = await requestNotificationPermission(user.uid, householdId);
+                  setNotificationsEnabled(!!token);
                 }
               }} style={{
                 width: 44, height: 26, borderRadius: 13, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
