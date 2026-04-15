@@ -28,31 +28,38 @@ export { messaging };
 
 // Request notification permission and get FCM token
 export async function requestNotificationPermission(userId, householdId) {
+  console.log("[FCM] requestNotificationPermission called", { userId, householdId, messagingAvailable: !!messaging });
   if (!messaging) return null;
   try {
     const permission = await Notification.requestPermission();
+    console.log("[FCM] Permission result:", permission);
     if (permission !== "granted") return null;
 
     // Get FCM token — uses the service worker for push
     // Wait for the service worker to be ready (not just registered) to avoid race condition
     const swRegistration = await navigator.serviceWorker.ready;
+    console.log("[FCM] Service worker ready:", swRegistration.active?.scriptURL);
     const token = await getToken(messaging, {
       vapidKey: "BAl2XBpMegRmgKa-2pTLnydrY7bozRL8geULzkp8IL7RbAHrWuTo7HJ7ukgEBsch7TC5gg7pHkK-nqT0A2oQPtg",
       serviceWorkerRegistration: swRegistration,
     });
+    console.log("[FCM] Token received:", token ? token.slice(0, 20) + "..." : "null");
 
     if (token) {
       // Store token in Firestore so Cloud Functions can send to this device
+      const tokenDocPath = `users/${userId}/tokens/fcm`;
+      console.log("[FCM] Saving token to Firestore at:", tokenDocPath);
       await setDoc(doc(db, "users", userId, "tokens", "fcm"), {
         token,
         householdId,
         updatedAt: new Date().toISOString(),
       });
+      console.log("[FCM] Token saved successfully");
     }
 
     return token;
   } catch (e) {
-    console.error("FCM token error:", e);
+    console.error("[FCM] Token error:", e);
     return null;
   }
 }
