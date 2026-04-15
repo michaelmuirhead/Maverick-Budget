@@ -190,8 +190,8 @@ function useApp(user, householdId) {
     removeLimit: useCallback(k => up(p => { const l = { ...(p.limits||{}) }; delete l[k]; return { ...p, limits: l }; }), []),
     addCategory: useCallback(c => up(p => ({ ...p, customCategories: [...(p.customCategories||[]), c] })), []),
     removeCategory: useCallback(id => up(p => ({ ...p, customCategories: (p.customCategories||[]).filter(c => c.id !== id) })), []),
-    setEnvelope: useCallback((nodeId, categoryId, cap) => up(p => ({
-      ...p, envelopes: { ...(p.envelopes||{}), [nodeId]: { ...((p.envelopes||{})[nodeId]||{}), [categoryId]: { cap } } }
+    setEnvelope: useCallback((nodeId, categoryId, envData) => up(p => ({
+      ...p, envelopes: { ...(p.envelopes||{}), [nodeId]: { ...((p.envelopes||{})[nodeId]||{}), [categoryId]: typeof envData === "number" ? { cap: envData } : envData } }
     })), []),
     removeEnvelope: useCallback((nodeId, categoryId) => up(p => {
       const nodeEnvs = { ...((p.envelopes||{})[nodeId]||{}) }; delete nodeEnvs[categoryId];
@@ -676,7 +676,7 @@ function Collapsible({ title, count, defaultOpen, children }) {
 }
 
 // ── Envelope Section (category-based envelopes for a budget node) ──
-function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelope }) {
+function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, removeEnvelope }) {
   const nodeEnvs = (envelopes || {})[nodeId] || {};
   const catIds = Object.keys(nodeEnvs);
   const cats = allCats();
@@ -685,23 +685,62 @@ function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelo
   const [addCap, setAddCap] = useState("");
   const [editingCat, setEditingCat] = useState(null);
   const [editCap, setEditCap] = useState("");
+  const [showRollConfirm, setShowRollConfirm] = useState(false);
 
-  // Categories that already have an envelope
+  // Categories that already have an envelope (include rollover in total)
   const envRows = catIds.map(catId => {
     const cat = cats.find(c => c.id === catId) || { id: catId, label: catId, icon: "📋", color: "#f97316" };
-    const cap = nodeEnvs[catId]?.cap || 0;
+    const envData = nodeEnvs[catId] || {};
+    const cap = envData.cap || 0;
+    const rollover = envData.rollover || 0;
+    const total = cap + rollover;
+    const rolled = !!envData.rolledTo;
     const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense").reduce((s, e) => s + e.amount, 0);
-    const left = cap - spent;
-    const pct = cap > 0 ? Math.min((spent / cap) * 100, 100) : 0;
-    return { catId, cat, cap, spent, left, pct, isOver: spent > cap };
+    const left = total - spent;
+    const pct = total > 0 ? Math.min((spent / total) * 100, 100) : 0;
+    return { catId, cat, cap, rollover, total, spent, left, pct, isOver: spent > total, rolled };
   });
 
   // Categories available to add (not already enveloped, skip income)
   const availableCats = cats.filter(c => c.id !== "income" && !catIds.includes(c.id));
 
-  const totalBudget = envRows.reduce((s, r) => s + r.cap, 0);
+  const totalBudget = envRows.reduce((s, r) => s + r.total, 0);
   const totalSpent = envRows.reduce((s, r) => s + r.spent, 0);
   const totalLeft = totalBudget - totalSpent;
+
+  // Find next sibling budget in the same parent folder for roll-forward
+  const findNextMonth = () => {
+    if (!nodes || nodes.length === 0) return null;
+    const thisNode = nodes.find(n => n.id === nodeId);
+    if (!thisNode || !thisNode.parentId) return null;
+    const siblings = nodes.filter(n => n.parentId === thisNode.parentId);
+    const myIdx = siblings.findIndex(s => s.id === nodeId);
+    if (myIdx < 0 || myIdx >= siblings.length - 1) return null;
+    return siblings[myIdx + 1];
+  };
+
+  const nextMonth = findNextMonth();
+  const rollableRows = envRows.filter(r => r.left > 0 && !r.rolled);
+  const totalRollable = rollableRows.reduce((s, r) => s + r.left, 0);
+  const anyRolled = envRows.some(r => r.rolled);
+  const canRoll = nextMonth && rollableRows.length > 0 && !anyRolled;
+
+  const handleRollForward = () => {
+    for (const row of rollableRows) {
+      // Mark source as rolled
+      const srcEnv = nodeEnvs[row.catId] || {};
+      setEnvelope(nodeId, row.catId, { ...srcEnv, rolledTo: nextMonth.id, rolledAmount: row.left });
+      // Add rollover to destination — inherit cap if destination doesn't have this category
+      const destNodeEnvs = (envelopes || {})[nextMonth.id] || {};
+      const destEnv = destNodeEnvs[row.catId] || {};
+      setEnvelope(nextMonth.id, row.catId, {
+        cap: destEnv.cap || row.cap,
+        rollover: (destEnv.rollover || 0) + row.left,
+        rolloverFrom: nodeId,
+      });
+    }
+    setShowRollConfirm(false);
+  };
 
   const handleAdd = () => {
     const v = parseFloat(addCap);
@@ -713,7 +752,10 @@ function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelo
 
   const handleEdit = (catId) => {
     const v = parseFloat(editCap);
-    if (v > 0) { setEnvelope(nodeId, catId, v); }
+    if (v > 0) {
+      const existing = nodeEnvs[catId] || {};
+      setEnvelope(nodeId, catId, { ...existing, cap: v });
+    }
     setEditingCat(null); setEditCap("");
   };
 
@@ -737,8 +779,8 @@ function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelo
       {/* Envelope rows */}
       {envRows.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 10 }}>
-          {envRows.map(({ catId, cat, cap, spent, left, pct, isOver }) => (
-            <div key={catId}>
+          {envRows.map(({ catId, cat, cap, rollover, total, spent, left, pct, isOver, rolled }) => (
+            <div key={catId} style={{ opacity: rolled ? 0.6 : 1 }}>
               {editingCat === catId ? (
                 /* ── Inline edit mode ── */
                 <div style={{ display: "flex", gap: 6, alignItems: "center", animation: "slideIn 0.15s ease" }}>
@@ -760,7 +802,9 @@ function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelo
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 }}>{cat.icon}</span>
                       <span style={{ fontSize: 12, color: T().text, fontWeight: 500 }}>{cat.label}</span>
-                      <span style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{fmt(spent)} / {fmt(cap)}</span>
+                      <span style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{fmt(spent)} / {fmt(total)}</span>
+                      {rollover > 0 && <span style={{ fontSize: 8, color: T().accentLight, fontWeight: 600, background: "rgba(99,102,241,0.1)", padding: "1px 4px", borderRadius: 3 }}>+{fmt(rollover)}</span>}
+                      {rolled && <span style={{ fontSize: 8, color: T().inc, fontWeight: 600, background: "rgba(34,197,94,0.1)", padding: "1px 4px", borderRadius: 3 }}>✓ rolled</span>}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                       <span style={{ fontSize: 11, fontFamily: T().mono, fontWeight: 600, color: isOver ? T().exp : T().textSub }}>
@@ -772,12 +816,67 @@ function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelo
                     </div>
                   </div>
                   <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, background: getBarColor(pct), borderRadius: 3, transition: "width 0.4s ease" }} />
+                    <div style={{ height: "100%", width: `${pct}%`, background: rolled ? T().textDim : getBarColor(pct), borderRadius: 3, transition: "width 0.4s ease" }} />
                   </div>
                 </div>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Roll forward button */}
+      {canRoll && !showRollConfirm && (
+        <button onClick={() => setShowRollConfirm(true)} style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          width: "100%", padding: "9px 0", borderRadius: 8, marginBottom: 8,
+          border: "1px dashed rgba(34,197,94,0.3)", background: "rgba(34,197,94,0.04)",
+          color: T().inc, fontSize: 11, fontWeight: 600, cursor: "pointer",
+        }}>
+          Roll forward {fmt(totalRollable)} → {nextMonth.name} →
+        </button>
+      )}
+
+      {/* Roll confirm */}
+      {showRollConfirm && nextMonth && (
+        <div style={{
+          background: "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+          border: `1px solid ${T().cardBorder}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8,
+          animation: "slideIn 0.2s ease",
+        }}>
+          <div style={{ fontSize: 12, color: T().text, fontWeight: 600, marginBottom: 6 }}>Roll forward to {nextMonth.name}?</div>
+          <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+            {rollableRows.map(r => (
+              <div key={r.catId} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                <span>{r.cat.icon} {r.cat.label}</span>
+                <span style={{ fontFamily: T().mono, color: T().inc, fontWeight: 600 }}>{fmt(r.left)}</span>
+              </div>
+            ))}
+            <div style={{ borderTop: `1px solid ${T().cardBorder}`, marginTop: 4, paddingTop: 4, display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+              <span>Total</span><span style={{ fontFamily: T().mono, color: T().inc }}>{fmt(totalRollable)}</span>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleRollForward} style={{
+              flex: 1, padding: "9px 0", borderRadius: 8, border: "none",
+              background: T().inc, color: "#0a0a1a", fontSize: 12, fontWeight: 700, cursor: "pointer",
+            }}>Roll → {nextMonth.name}</button>
+            <button onClick={() => setShowRollConfirm(false)} style={{
+              padding: "9px 14px", borderRadius: 8, border: `1px solid ${T().cardBorder}`,
+              background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Rolled badge */}
+      {anyRolled && nextMonth && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", marginBottom: 8,
+          background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 8,
+        }}>
+          <span style={{ fontSize: 11 }}>✓</span>
+          <span style={{ fontSize: 11, color: T().inc, fontWeight: 600 }}>Rolled forward to {nextMonth.name}</span>
         </div>
       )}
 
@@ -817,9 +916,8 @@ function EnvelopeSection({ nodeId, envelopes, entries, setEnvelope, removeEnvelo
 }
 
 // ── Envelope Settings (in Limits & Recurring tab) — now just a pointer ──
-function EnvelopeSettings({ nodeId, envelopes, setEnvelope, removeEnvelope }) {
-  // Full envelope management in the settings tab too
-  return <EnvelopeSection nodeId={nodeId} envelopes={envelopes} entries={[]} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />;
+function EnvelopeSettings({ nodeId, envelopes, nodes, entries, setEnvelope, removeEnvelope }) {
+  return <EnvelopeSection nodeId={nodeId} envelopes={envelopes} entries={entries} nodes={nodes} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />;
 }
 
 // ══════════════════════════════════════════════════
@@ -873,6 +971,7 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
               nodeId={node.id}
               envelopes={envelopes}
               entries={entries}
+              nodes={nodes}
               setEnvelope={setEnvelope}
               removeEnvelope={removeEnvelope}
             />
@@ -924,7 +1023,7 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
         ) : tab === "settings" ? (
           <div style={{ padding: "0 20px 40px", flex: 1, overflowY: "auto", overscrollBehavior: "contain", display: "flex", flexDirection: "column", gap: 20 }}>
             {/* Envelope config */}
-            <EnvelopeSettings nodeId={node.id} envelopes={envelopes} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />
+            <EnvelopeSettings nodeId={node.id} envelopes={envelopes} nodes={nodes} entries={entries} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />
             <LimitsPanel nodeId={node.id} entries={entries} limits={limits} setLimit={setLimit} removeLimit={removeLimit} />
             <RecurringPanel nodeId={node.id} recurrings={recurrings} onAdd={addRecurring} onUpdate={updateRecurring} onRemove={removeRecurring} onAddEntry={addEntry} />
             <CategoryManager customCategories={customCategories || []} onAdd={addCategory} onRemove={removeCategory} />
