@@ -17,35 +17,39 @@ const DEFAULT_PREFS = {
 };
 
 // Check envelope thresholds and return alerts
+// New model: envelopes[nodeId][categoryId] = { cap }
 function checkEnvelopeAlerts(beforeData, afterData) {
   const envelopes = afterData?.envelopes || {};
-  const beforeEnvelopes = beforeData?.envelopes || {};
   const entries = afterData?.entries || [];
+  const beforeEntries = beforeData?.entries || [];
   const nodes = afterData?.nodes || [];
   const alerts = [];
 
-  for (const [nodeId, env] of Object.entries(envelopes)) {
-    if (!env || !env.cap || env.cap <= 0) continue;
-    const total = env.cap + (env.rollover || 0);
-    const spent = entries.filter(e => e.nodeId === nodeId && e.type === "expense")
-      .reduce((s, e) => s + e.amount, 0);
-    const pct = (spent / total) * 100;
+  for (const [nodeId, catEnvs] of Object.entries(envelopes)) {
+    if (!catEnvs || typeof catEnvs !== "object") continue;
     const node = nodes.find(n => n.id === nodeId);
-    const name = node ? node.name : "Budget";
+    const nodeName = node ? node.name : "Budget";
 
-    // Check if we just crossed a threshold (compare with before state)
-    const beforeSpent = (beforeData?.entries || [])
-      .filter(e => e.nodeId === nodeId && e.type === "expense")
-      .reduce((s, e) => s + e.amount, 0);
-    const beforePct = total > 0 ? (beforeSpent / total) * 100 : 0;
+    for (const [catId, env] of Object.entries(catEnvs)) {
+      if (!env || !env.cap || env.cap <= 0) continue;
+      const cap = env.cap;
+      const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense")
+        .reduce((s, e) => s + e.amount, 0);
+      const pct = (spent / cap) * 100;
 
-    const amount = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(spent);
-    const cap = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total);
+      const beforeSpent = beforeEntries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense")
+        .reduce((s, e) => s + e.amount, 0);
+      const beforePct = cap > 0 ? (beforeSpent / cap) * 100 : 0;
 
-    if (pct >= 100 && beforePct < 100) {
-      alerts.push({ type: "envelopeAlert", message: `${name} envelope exceeded: ${amount} of ${cap} (${Math.round(pct)}%)` });
-    } else if (pct >= 80 && beforePct < 80) {
-      alerts.push({ type: "envelopeAlert", message: `${name} envelope at ${Math.round(pct)}%: ${amount} of ${cap}` });
+      const amount = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(spent);
+      const capFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cap);
+      const catLabel = catId.charAt(0).toUpperCase() + catId.slice(1);
+
+      if (pct >= 100 && beforePct < 100) {
+        alerts.push({ type: "envelopeAlert", message: `${catLabel} envelope in ${nodeName} exceeded: ${amount} of ${capFmt} (${Math.round(pct)}%)` });
+      } else if (pct >= 80 && beforePct < 80) {
+        alerts.push({ type: "envelopeAlert", message: `${catLabel} envelope in ${nodeName} at ${Math.round(pct)}%: ${amount} of ${capFmt}` });
+      }
     }
   }
   return alerts;
