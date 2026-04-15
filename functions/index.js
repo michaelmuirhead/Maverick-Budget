@@ -51,7 +51,8 @@ exports.onBudgetUpdate = onDocumentWritten(
     const members = household.members || [];
 
     // Get FCM tokens for all members EXCEPT the one who made the change
-    const tokens = [];
+    // Track {token, uid} pairs so we can clean up the right user's token on failure
+    const tokenEntries = [];
     for (const uid of members) {
       const tokenSnap = await db
         .collection("users")
@@ -71,17 +72,17 @@ exports.onBudgetUpdate = onDocumentWritten(
           .get();
         const email = profileSnap.exists ? profileSnap.data().email : null;
         if (email !== updatedBy && tokenData.token) {
-          tokens.push(tokenData.token);
+          tokenEntries.push({ token: tokenData.token, uid });
         }
       }
     }
 
-    if (tokens.length === 0) return;
+    if (tokenEntries.length === 0) return;
 
     // Send push to each device
     const shortEmail = updatedBy.split("@")[0];
     const results = await Promise.allSettled(
-      tokens.map((token) =>
+      tokenEntries.map(({ token }) =>
         messaging.send({
           token,
           notification: {
@@ -103,7 +104,7 @@ exports.onBudgetUpdate = onDocumentWritten(
       )
     );
 
-    // Clean up any invalid tokens
+    // Clean up any invalid tokens — use the correct UID for each result
     for (let i = 0; i < results.length; i++) {
       if (results[i].status === "rejected") {
         const err = results[i].reason;
@@ -111,8 +112,15 @@ exports.onBudgetUpdate = onDocumentWritten(
           err?.code === "messaging/registration-token-not-registered" ||
           err?.code === "messaging/invalid-registration-token"
         ) {
-          console.log("Removing invalid token for member:", members[i]);
-          // Token is stale, could clean it up here
+          const staleUid = tokenEntries[i].uid;
+          console.log("Removing invalid token for member:", staleUid);
+          await db
+            .collection("users")
+            .doc(staleUid)
+            .collection("tokens")
+            .doc("fcm")
+            .delete()
+            .catch((e) => console.error("Token cleanup failed:", e));
         }
       }
     }
