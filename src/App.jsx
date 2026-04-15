@@ -742,6 +742,29 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
     setShowRollConfirm(false);
   };
 
+  const handleUnroll = () => {
+    for (const row of envRows.filter(r => r.rolled)) {
+      const srcEnv = nodeEnvs[row.catId] || {};
+      const rolledAmount = srcEnv.rolledAmount || 0;
+      const destId = srcEnv.rolledTo;
+      // Remove rolled markers from source
+      const { rolledTo, rolledAmount: _ra, ...cleanSrc } = srcEnv;
+      setEnvelope(nodeId, row.catId, cleanSrc);
+      // Remove rollover from destination
+      if (destId) {
+        const destNodeEnvs = (envelopes || {})[destId] || {};
+        const destEnv = destNodeEnvs[row.catId] || {};
+        const newRollover = Math.max(0, (destEnv.rollover || 0) - rolledAmount);
+        const { rolloverFrom, ...cleanDest } = destEnv;
+        if (destEnv.cap > 0 || newRollover > 0) {
+          setEnvelope(destId, row.catId, { ...cleanDest, rollover: newRollover });
+        } else {
+          removeEnvelope(destId, row.catId);
+        }
+      }
+    }
+  };
+
   const handleAdd = () => {
     const v = parseFloat(addCap);
     if (addCat && v > 0) {
@@ -869,14 +892,20 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
         </div>
       )}
 
-      {/* Rolled badge */}
+      {/* Rolled badge with undo */}
       {anyRolled && nextMonth && (
         <div style={{
-          display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", marginBottom: 8,
+          display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", marginBottom: 8,
           background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 8,
         }}>
-          <span style={{ fontSize: 11 }}>✓</span>
-          <span style={{ fontSize: 11, color: T().inc, fontWeight: 600 }}>Rolled forward to {nextMonth.name}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 11 }}>✓</span>
+            <span style={{ fontSize: 11, color: T().inc, fontWeight: 600 }}>Rolled forward to {nextMonth.name}</span>
+          </div>
+          <button onClick={handleUnroll} style={{
+            background: "none", border: `1px solid rgba(34,197,94,0.3)`, borderRadius: 6,
+            padding: "3px 8px", color: T().inc, fontSize: 10, fontWeight: 600, cursor: "pointer",
+          }}>Undo</button>
         </div>
       )}
 
