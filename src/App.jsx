@@ -53,7 +53,7 @@ function guessCategory(label, entries = []) {
   return null;
 }
 const PALETTE = ["#6366f1","#3b82f6","#22c55e","#f59e0b","#ef4444","#ec4899","#8b5cf6","#06b6d4","#14b8a6","#f97316","#a855f7","#64748b"];
-const FREQ = [{ id: "weekly", label: "Weekly", days: 7 },{ id: "biweekly", label: "Bi-weekly", days: 14 },{ id: "semimonthly", label: "Semi-monthly", days: 15 },{ id: "monthly", label: "Monthly", days: 30 },{ id: "yearly", label: "Yearly", days: 365 }];
+
 
 const THEMES = {
   midnight: {
@@ -101,20 +101,7 @@ function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
 
 // ── Recurrings on load ──
 function processRecurrings(data) {
-  const now = new Date();
-  let { nodes, entries, recurrings = [], limits = {} } = data;
-  let changed = false; const ne = [];
-  recurrings = recurrings.map(r => {
-    const f = FREQ.find(x => x.id === r.frequency); if (!f) return r;
-    const last = r.lastRun ? new Date(r.lastRun) : new Date(0);
-    const gap = daysBetween(last, now);
-    if (gap >= f.days) {
-      for (let i = 0; i < Math.floor(gap / f.days); i++) ne.push({ id: uid(), nodeId: r.nodeId, label: r.label + " (auto)", amount: r.amount, category: r.category, type: r.type, date: todayStr(), dateISO: todayISO(), recurring: true, tags: [] });
-      changed = true; return { ...r, lastRun: now.toISOString() };
-    }
-    return r;
-  });
-  return changed ? { nodes, entries: [...entries, ...ne], recurrings, limits } : { ...data, recurrings: data.recurrings || [], limits: data.limits || {} };
+  return { ...data, limits: data.limits || {} };
 }
 
 // ── CSV ──
@@ -173,7 +160,7 @@ function useApp(user, householdId) {
     cats: getCats(d.customCategories),
     addNode: useCallback(n => up(p => ({ ...p, nodes: [...p.nodes, n] })), []),
     updateNode: useCallback((id, u) => up(p => ({ ...p, nodes: p.nodes.map(n => n.id === id ? { ...n, ...u } : n) })), []),
-    removeNode: useCallback(id => up(p => { const all = [id, ...getDesc(p.nodes, id)]; return { ...p, nodes: p.nodes.filter(n => !all.includes(n.id)), entries: p.entries.filter(e => !all.includes(e.nodeId)), recurrings: (p.recurrings||[]).filter(r => !all.includes(r.nodeId)) }; }), [getDesc]),
+    removeNode: useCallback(id => up(p => { const all = [id, ...getDesc(p.nodes, id)]; return { ...p, nodes: p.nodes.filter(n => !all.includes(n.id)), entries: p.entries.filter(e => !all.includes(e.nodeId)) }; }), [getDesc]),
     reorderNodes: useCallback((pid, ids) => up(p => { const others = p.nodes.filter(n => n.parentId !== pid); const reordered = ids.map(id => p.nodes.find(n => n.id === id)).filter(Boolean); return { ...p, nodes: [...others, ...reordered] }; }), []),
     addEntry: useCallback(e => up(p => ({ ...p, entries: [...p.entries, e] })), []),
     updateEntry: useCallback((id, u) => up(p => ({ ...p, entries: p.entries.map(e => e.id === id ? { ...e, ...u } : e) })), []),
@@ -183,9 +170,6 @@ function useApp(user, householdId) {
       const reordered = orderedIds.map(id => p.entries.find(e => e.id === id)).filter(Boolean);
       return { ...p, entries: [...others, ...reordered] };
     }), []),
-    addRecurring: useCallback(r => up(p => ({ ...p, recurrings: [...(p.recurrings||[]), r] })), []),
-    updateRecurring: useCallback((id, u) => up(p => ({ ...p, recurrings: (p.recurrings||[]).map(r => r.id === id ? { ...r, ...u } : r) })), []),
-    removeRecurring: useCallback(id => up(p => ({ ...p, recurrings: (p.recurrings||[]).filter(r => r.id !== id) })), []),
     setLimit: useCallback((k, v) => up(p => ({ ...p, limits: { ...(p.limits||{}), [k]: v } })), []),
     removeLimit: useCallback(k => up(p => { const l = { ...(p.limits||{}) }; delete l[k]; return { ...p, limits: l }; }), []),
     addCategory: useCallback(c => up(p => ({ ...p, customCategories: [...(p.customCategories||[]), c] })), []),
@@ -512,7 +496,7 @@ function YearInReview({ entries }) {
 
 // ── Category Breakdown (donut chart) ──
 function CategoryBreakdown({ entries }) {
-  const expEntries = entries.filter(e => e.type === "expense" && e.amount > 0);
+  const expEntries = entries.filter(e => e.type === "expense" && e.amount > 0 && e.paid !== false);
   if (expEntries.length < 2) return null;
   const catTotals = {};
   expEntries.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + e.amount; });
@@ -576,7 +560,7 @@ function BudgetVsActual({ entries, envelopes, nodes, nodeId }) {
       if (!env || !env.cap || env.cap <= 0) continue;
       if (!catTotals[catId]) catTotals[catId] = { cap: 0, actual: 0 };
       catTotals[catId].cap += env.cap;
-      const spent = entries.filter(e => e.nodeId === nid && e.category === catId && e.type === "expense").reduce((s, e) => s + e.amount, 0);
+      const spent = entries.filter(e => e.nodeId === nid && e.category === catId && e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
       catTotals[catId].actual += spent;
     }
   });
@@ -628,24 +612,12 @@ function BudgetVsActual({ entries, envelopes, nodes, nodeId }) {
 }
 
 // ── Budget Alerts ──
-function BudgetAlerts({ nodeId, entries, limits }) { const alerts = []; allCats().filter(c => c.id !== "income").forEach(cat => { const k = `${nodeId}-${cat.id}`; const lim = limits[k]; if (!lim || lim <= 0) return; const spent = entries.filter(e => e.nodeId === nodeId && e.category === cat.id && e.type === "expense").reduce((s, e) => s + e.amount, 0); const pct = (spent / lim) * 100; if (pct >= 100) alerts.push({ cat, pct, spent, lim, type: "over" }); else if (pct >= 80) alerts.push({ cat, pct, spent, lim, type: "warning" }); }); if (!alerts.length) return null; return (<div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>{alerts.map(a => (<div key={a.cat.id} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 500, background: a.type === "over" ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.12)", color: a.type === "over" ? "#ef4444" : "#f59e0b", border: `1px solid ${a.type === "over" ? "rgba(239,68,68,0.2)" : "rgba(245,158,11,0.2)"}` }}>{a.type === "over" ? "⚠ " : "⚡ "}<strong>{a.cat.label}</strong>: {fmt(a.spent)} of {fmt(a.lim)} ({Math.round(a.pct)}%){a.type === "over" ? " — over budget!" : " — nearing limit"}</div>))}</div>); }
+function BudgetAlerts({ nodeId, entries, limits }) { const alerts = []; allCats().filter(c => c.id !== "income").forEach(cat => { const k = `${nodeId}-${cat.id}`; const lim = limits[k]; if (!lim || lim <= 0) return; const spent = entries.filter(e => e.nodeId === nodeId && e.category === cat.id && e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0); const pct = (spent / lim) * 100; if (pct >= 100) alerts.push({ cat, pct, spent, lim, type: "over" }); else if (pct >= 80) alerts.push({ cat, pct, spent, lim, type: "warning" }); }); if (!alerts.length) return null; return (<div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>{alerts.map(a => (<div key={a.cat.id} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 500, background: a.type === "over" ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.12)", color: a.type === "over" ? "#ef4444" : "#f59e0b", border: `1px solid ${a.type === "over" ? "rgba(239,68,68,0.2)" : "rgba(245,158,11,0.2)"}` }}>{a.type === "over" ? "⚠ " : "⚡ "}<strong>{a.cat.label}</strong>: {fmt(a.spent)} of {fmt(a.lim)} ({Math.round(a.pct)}%){a.type === "over" ? " — over budget!" : " — nearing limit"}</div>))}</div>); }
 
-// ── Recurring Panel ──
-function RecurringPanel({ nodeId, recurrings, onAdd, onUpdate, onRemove, onAddEntry }) {
-  const [adding, setAdding] = useState(false); const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ label: "", amount: "", category: "other", type: "expense", frequency: "monthly" });
-  const nr = (recurrings||[]).filter(r => r.nodeId === nodeId);
-  const handleAdd = () => { const amount = parseFloat(form.amount); if (!form.label.trim() || !amount || amount <= 0) return; const cat = form.type === "income" ? "income" : form.category; onAdd({ id: uid(), nodeId, label: form.label.trim(), amount, category: cat, type: form.type, frequency: form.frequency, lastRun: new Date().toISOString() }); onAddEntry({ id: uid(), nodeId, label: form.label.trim(), amount, category: cat, type: form.type, date: todayStr(), dateISO: todayISO(), recurring: true, tags: [] }); setForm({ label: "", amount: "", category: "other", type: "expense", frequency: "monthly" }); setAdding(false); haptic(); };
-  const RR = ({ r }) => { const cat = allCats().find(c => c.id === r.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const freq = FREQ.find(f => f.id === r.frequency); const isE = editingId === r.id; const [ef, setEf] = useState({ label: r.label, amount: String(r.amount), category: r.category, type: r.type, frequency: r.frequency });
-    const commitEdit = () => { const amt = parseFloat(ef.amount); if (!ef.label.trim() || !amt) { setEditingId(null); return; } onUpdate(r.id, { label: ef.label.trim(), amount: amt, category: ef.type === "income" ? "income" : ef.category, type: ef.type, frequency: ef.frequency }); setEditingId(null); haptic(); };
-    if (isE) return (<div style={{ padding: 10, background: "rgba(255,255,255,0.04)", borderRadius: 8, borderLeft: `3px solid ${cat.color}`, display: "flex", flexDirection: "column", gap: 6, animation: "slideIn 0.15s ease" }}><div style={{ display: "flex", gap: 6 }}>{["expense","income"].map(t => (<button key={t} onClick={() => setEf({...ef,type:t})} style={{ flex: 1, padding: "5px 0", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600, textTransform: "uppercase", background: ef.type === t ? (t === "income" ? "#22c55e" : "#ef4444") : "rgba(255,255,255,0.05)", color: ef.type === t ? "#0a0a1a" : "#94a3b8" }}>{t}</button>))}</div><input value={ef.label} onChange={e => setEf({...ef,label:e.target.value})} placeholder="Label" style={{ background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 8px", color: T().text, fontSize: 12, outline: "none" }} /><div style={{ display: "flex", gap: 6 }}><div style={{ position: "relative", flex: 1 }}><span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 11, fontFamily: T().mono }}>$</span><input value={ef.amount} onChange={e => setEf({...ef,amount:e.target.value.replace(/[^0-9.]/g,"")})} placeholder="0.00" style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 8px 5px 20px", color: T().text, fontSize: 12, fontFamily: T().mono, outline: "none" }} /></div><select value={ef.frequency} onChange={e => setEf({...ef,frequency:e.target.value})} style={{ background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 6px", color: T().text, fontSize: 11, outline: "none" }}>{FREQ.map(f => (<option key={f.id} value={f.id}>{f.label}</option>))}</select></div>{ef.type === "expense" && <select value={ef.category} onChange={e => setEf({...ef,category:e.target.value})} style={{ background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 6px", color: T().text, fontSize: 11, outline: "none" }}>{allCats().filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}</select>}<div style={{ display: "flex", gap: 6 }}><button onClick={commitEdit} style={{ flex: 1, padding: "7px 0", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, background: T().accent, color: "#fff" }}>Save</button><button onClick={() => setEditingId(null)} style={{ padding: "7px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, color: T().textSub, background: T().inputBg }}>Cancel</button><button onClick={() => { onRemove(r.id); setEditingId(null); haptic(); }} style={{ padding: "7px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>Delete</button></div></div>);
-    return (<div onClick={() => setEditingId(r.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: T().surface, borderRadius: 8, borderLeft: `3px solid ${cat.color}`, cursor: "pointer", transition: "background 0.15s" }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}><span style={{ fontSize: 14 }}>{cat.icon}</span><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, color: T().text, fontWeight: 500 }}>{r.label}</div><div style={{ fontSize: 10, color: T().textMuted }}>{freq?.label} · {r.type === "income" ? "Income" : cat.label}</div></div><span style={{ fontSize: 13, fontFamily: T().mono, fontWeight: 600, color: r.type === "income" ? "#22c55e" : "#f1f5f9" }}>{r.type === "income" ? "+" : "−"}{fmt(r.amount)}</span><span style={{ fontSize: 10, color: "#475569" }}>✎</span></div>);
-  };
-  return (<div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Recurring ({nr.length})</div>{nr.length === 0 && !adding && <div style={{ fontSize: 12, color: "#334155", marginBottom: 8 }}>No recurring transactions</div>}<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{nr.map(r => (<RR key={r.id} r={r} />))}</div>{adding ? (<div style={{ marginTop: 8, padding: 12, background: T().surface, borderRadius: 10, display: "flex", flexDirection: "column", gap: 8, animation: "slideIn 0.2s ease" }}><div style={{ display: "flex", gap: 6 }}>{["expense","income"].map(t => (<button key={t} onClick={() => setForm({...form,type:t})} style={{ flex: 1, padding: "6px 0", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, textTransform: "uppercase", background: form.type === t ? (t === "income" ? "#22c55e" : "#ef4444") : "rgba(255,255,255,0.05)", color: form.type === t ? "#0a0a1a" : "#94a3b8" }}>{t}</button>))}</div><input value={form.label} onChange={e => setForm({...form,label:e.target.value})} placeholder="Label" style={{ background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "6px 10px", color: T().text, fontSize: 13, outline: "none" }} /><div style={{ display: "flex", gap: 6 }}><div style={{ position: "relative", flex: 1 }}><span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span><input value={form.amount} onChange={e => setForm({...form,amount:e.target.value.replace(/[^0-9.]/g,"")})} placeholder="0.00" style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "6px 10px 6px 22px", color: T().text, fontSize: 13, fontFamily: T().mono, outline: "none" }} /></div><select value={form.frequency} onChange={e => setForm({...form,frequency:e.target.value})} style={{ background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "6px 8px", color: T().text, fontSize: 12, outline: "none" }}>{FREQ.map(f => (<option key={f.id} value={f.id}>{f.label}</option>))}</select></div>{form.type === "expense" && <select value={form.category} onChange={e => setForm({...form,category:e.target.value})} style={{ background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "6px 8px", color: T().text, fontSize: 12, outline: "none" }}>{allCats().filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}</select>}<div style={{ display: "flex", gap: 6 }}><button onClick={handleAdd} style={{ flex: 1, padding: "8px 0", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: T().accent, color: "#fff" }}>Add Recurring</button><button onClick={() => setAdding(false)} style={{ padding: "8px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, color: T().textSub, background: T().inputBg }}>Cancel</button></div></div>) : <button onClick={() => setAdding(true)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)", background: "transparent", color: T().textMuted, fontSize: 12, cursor: "pointer" }}>+ Add recurring</button>}</div>);
-}
+
 
 // ── Limits Panel ──
-function LimitsPanel({ nodeId, entries, limits, setLimit, removeLimit }) { const cats = allCats().filter(c => c.id !== "income"); const ne = entries.filter(e => e.nodeId === nodeId && e.type === "expense"); return (<div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Category Limits</div><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{cats.map(cat => { const key = `${nodeId}-${cat.id}`; const lim = limits[key]||0; const spent = ne.filter(e => e.category === cat.id).reduce((s,e) => s+e.amount, 0); const pct = lim > 0 ? Math.min((spent/lim)*100,100) : 0; const over = lim > 0 && spent > lim; const warn = pct >= 80 && !over; return (<div key={cat.id}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}><span style={{ fontSize: 13, width: 22, textAlign: "center", color: cat.color }}>{cat.icon}</span><span style={{ fontSize: 11, color: T().textSub, flex: 1 }}>{cat.label}</span><span style={{ fontSize: 10, fontFamily: T().mono, color: T().textMuted }}>Spent: {fmt(spent)}</span><div style={{ position: "relative", width: 64 }}><span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", color: "#475569", fontSize: 10, fontFamily: T().mono }}>$</span><input type="number" min="0" step="50" value={lim||""} onChange={e => { const v = parseFloat(e.target.value)||0; if (v > 0) setLimit(key,v); else removeLimit(key); }} placeholder="Limit" style={{ width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "4px 6px 4px 18px", color: T().text, fontSize: 11, fontFamily: T().mono, outline: "none", textAlign: "right" }} /></div></div>{lim > 0 && <div style={{ height: 6, background: "#1a1a2e", borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: over ? "#ef4444" : warn ? "#f59e0b" : cat.color, borderRadius: 3, transition: "width 0.5s ease" }} /></div>}</div>); })}</div></div>); }
+function LimitsPanel({ nodeId, entries, limits, setLimit, removeLimit }) { const cats = allCats().filter(c => c.id !== "income"); const ne = entries.filter(e => e.nodeId === nodeId && e.type === "expense" && e.paid !== false); return (<div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Category Limits</div><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{cats.map(cat => { const key = `${nodeId}-${cat.id}`; const lim = limits[key]||0; const spent = ne.filter(e => e.category === cat.id).reduce((s,e) => s+e.amount, 0); const pct = lim > 0 ? Math.min((spent/lim)*100,100) : 0; const over = lim > 0 && spent > lim; const warn = pct >= 80 && !over; return (<div key={cat.id}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}><span style={{ fontSize: 13, width: 22, textAlign: "center", color: cat.color }}>{cat.icon}</span><span style={{ fontSize: 11, color: T().textSub, flex: 1 }}>{cat.label}</span><span style={{ fontSize: 10, fontFamily: T().mono, color: T().textMuted }}>Spent: {fmt(spent)}</span><div style={{ position: "relative", width: 64 }}><span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", color: "#475569", fontSize: 10, fontFamily: T().mono }}>$</span><input type="number" min="0" step="50" value={lim||""} onChange={e => { const v = parseFloat(e.target.value)||0; if (v > 0) setLimit(key,v); else removeLimit(key); }} placeholder="Limit" style={{ width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "4px 6px 4px 18px", color: T().text, fontSize: 11, fontFamily: T().mono, outline: "none", textAlign: "right" }} /></div></div>{lim > 0 && <div style={{ height: 6, background: "#1a1a2e", borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: over ? "#ef4444" : warn ? "#f59e0b" : cat.color, borderRadius: 3, transition: "width 0.5s ease" }} /></div>}</div>); })}</div></div>); }
 
 // ── Category Manager ──
 function CategoryManager({ customCategories = [], onAdd, onRemove }) {
@@ -707,8 +679,8 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
   const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
   const onTS = e => { ts.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; setSwiping(false); };
-  const onTM = e => { const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -160)); e.preventDefault(); } else if (Math.abs(dx) > Math.abs(dy) && dx > 0 && swipeX < 0) { setSwiping(true); setSwipeX(Math.min(swipeX + dx, 0)); e.preventDefault(); } };
-  const onTE = () => { if (swipeX < -60) { setSwipeX(-160); } else { setSwipeX(0); } setSwiping(false); };
+  const onTM = e => { const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -210)); e.preventDefault(); } else if (Math.abs(dx) > Math.abs(dy) && dx > 0 && swipeX < 0) { setSwiping(true); setSwipeX(Math.min(swipeX + dx, 0)); e.preventDefault(); } };
+  const onTE = () => { if (swipeX < -80) { setSwipeX(-210); } else { setSwipeX(0); } setSwiping(false); };
   useEffect(() => { if (isEditing) setTimeout(() => { lRef.current?.focus(); rRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100); }, [isEditing]);
 
   const autoCategory = () => {
@@ -743,14 +715,18 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
 
   return (
     <div style={{ position: "relative", overflow: "hidden", borderRadius: 10 }}>
-      <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 160, display: "flex", borderRadius: "0 10px 10px 0" }}>
+      <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 210, display: "flex", borderRadius: "0 10px 10px 0" }}>
+        <button onClick={() => { onUpdate(entry.id, { paid: !entry.paid }); haptic(); setSwipeX(0); }}
+          style={{ flex: 1, background: entry.paid ? "#475569" : "#22c55e", border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+          {entry.paid ? "✓" : "○"}<span style={{ fontSize: 9 }}>{entry.paid ? "Unpay" : "Paid"}</span>
+        </button>
         <button onClick={() => { onDuplicate(entry); haptic(); setSwipeX(0); }}
-          style={{ flex: 1, background: T().accent, border: "none", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
-          ❐ Copy
+          style={{ flex: 1, background: T().accent, border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+          ❐<span style={{ fontSize: 9 }}>Copy</span>
         </button>
         <button onClick={() => { onRemove(entry.id); haptic(15); }}
-          style={{ flex: 1, background: "#ef4444", border: "none", borderRadius: "0 10px 10px 0", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          Delete
+          style={{ flex: 1, background: "#ef4444", border: "none", borderRadius: "0 10px 10px 0", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+          ✕<span style={{ fontSize: 9 }}>Delete</span>
         </button>
       </div>
       <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onClick={() => { if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
@@ -758,11 +734,11 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDark, fontSize: 14, padding: "12px 10px", margin: "-10px -4px -10px -6px", touchAction: "none", userSelect: "none", flexShrink: 0 }}>⠿</div>
         <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: 0.7, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 500, color: T().text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}{entry.recurring && <span style={{ fontSize: 9, color: T().accent, marginLeft: 6, fontWeight: 600 }}>↻</span>}</div>
+          <div style={{ fontSize: 14, fontWeight: 500, color: entry.paid ? T().text : T().textMuted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{!entry.paid && <span style={{ fontSize: 9, color: T().textDim, marginRight: 4, fontWeight: 600, verticalAlign: "middle" }}>○</span>}{entry.label || "(untitled)"}</div>
           <div style={{ fontSize: 11, color: T().textMuted, marginTop: 1 }}>{cat.label} · {entry.date}{entry.tags?.length > 0 && <span style={{ marginLeft: 4, color: T().accentLight }}>{entry.tags.map(t => `#${t}`).join(" ")}</span>}</div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: 14, color: isInc ? T().inc : T().exp }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
+          <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: 14, color: isInc ? T().inc : T().exp, opacity: entry.paid ? 1 : 0.5 }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
           {runningBalance !== undefined && <div style={{ fontFamily: T().mono, fontSize: 10, color: runningBalance >= 0 ? `${T().inc}80` : `${T().exp}80`, marginTop: 1 }}>{fmt(runningBalance)}</div>}
         </div>
       </div>
@@ -772,7 +748,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
 
 // ── Donut ──
 function DonutChart({ entries }) {
-  const expenses = entries.filter(e => e.type === "expense");
+  const expenses = entries.filter(e => e.type === "expense" && e.paid !== false);
   const byC = allCats().filter(c => c.id !== "income").map(c => ({...c, total: expenses.filter(e => e.category === c.id).reduce((s, e) => s + e.amount, 0)})).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
   const tot = byC.reduce((s, c) => s + c.total, 0);
   if (tot === 0) return (<div style={{ textAlign: "center", padding: 20, color: "#475569", fontSize: 13 }}>No expenses yet</div>);
@@ -857,7 +833,7 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
     const rollover = envData.rollover || 0;
     const total = cap + rollover;
     const rolled = !!envData.rolledTo;
-    const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense").reduce((s, e) => s + e.amount, 0);
+    const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
     const left = total - spent;
     const pct = total > 0 ? Math.min((spent / total) * 100, 100) : 0;
     return { catId, cat, cap, rollover, total, spent, left, pct, isOver: spent > total, rolled };
@@ -1143,7 +1119,7 @@ function EnvelopeSettings({ nodeId, envelopes, nodes, entries, setEnvelope, remo
 // ══════════════════════════════════════════════════
 // NODE PAGE
 // ══════════════════════════════════════════════════
-function NodePage({ node, parentName, nodes, entries, recurrings, limits, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addRecurring, updateRecurring, removeRecurring, setLimit, removeLimit, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
+function NodePage({ node, parentName, nodes, entries, limits, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, setLimit, removeLimit, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1182,11 +1158,6 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
       if (limits[key] > 0) {
         setLimit(`${newId}-${catId}`, limits[key]);
       }
-    }
-    // Copy recurring templates (not entries)
-    const srcRecurrings = (recurrings || []).filter(r => r.nodeId === copyingFrom);
-    for (const r of srcRecurrings) {
-      addRecurring({ ...r, id: uid(), nodeId: newId });
     }
     setCopyingFrom(null);
     haptic();
@@ -1293,7 +1264,6 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
             {/* Envelope config */}
             <EnvelopeSettings nodeId={node.id} envelopes={envelopes} nodes={nodes} entries={entries} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />
             <LimitsPanel nodeId={node.id} entries={entries} limits={limits} setLimit={setLimit} removeLimit={removeLimit} />
-            <RecurringPanel nodeId={node.id} recurrings={recurrings} onAdd={addRecurring} onUpdate={updateRecurring} onRemove={removeRecurring} onAddEntry={addEntry} />
             <CategoryManager customCategories={customCategories || []} onAdd={addCategory} onRemove={removeCategory} />
             <div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Import / Export</div><div style={{ display: "flex", gap: 8 }}><button onClick={() => exportCSV(directEntries, node.name)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↓ Export CSV</button><button onClick={() => fileRef.current?.click()} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↑ Import CSV</button><input ref={fileRef} type="file" accept=".csv" onChange={handleImport} style={{ display: "none" }} /></div></div>
           </div>
@@ -1529,9 +1499,9 @@ export default function App({ user, householdId }) {
   }
 
   return shell(
-    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} recurrings={d.recurrings} limits={d.limits} customCategories={d.customCategories} envelopes={d.envelopes} displayPrefs={displayPrefs}
+    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} limits={d.limits} customCategories={d.customCategories} envelopes={d.envelopes} displayPrefs={displayPrefs}
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
-      addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries} addRecurring={app.addRecurring} updateRecurring={app.updateRecurring} removeRecurring={app.removeRecurring}
+      addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
       setLimit={app.setLimit} removeLimit={app.removeLimit} addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc} />
   );
 }
