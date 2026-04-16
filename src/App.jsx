@@ -15,7 +15,30 @@ function getCats(custom = []) { return [...DEFAULT_CATEGORIES, ...custom.filter(
 // Keep a global ref so getCats can always access custom categories
 window.__CUSTOM_CATS__ = [];
 function allCats() { return getCats(window.__CUSTOM_CATS__ || []); }
-const ICONS = ["🛒","🏥","👶","🐾","🎓","💪","✈️","🎁","☕","📱","💇","🔧","🏋️","🎵","📚","👗","🧹","💊","🚌","🍔","🎬","💡","🏖️","🛍️"];
+const ICONS = [
+  // Food & Drink
+  "🛒","🍔","🍕","🍣","🍰","☕","🍺","🥤","🧁","🥑","🍜","🥩",
+  // Home & Living
+  "🏠","🛋️","🧹","🔧","🪴","🏡","🛏️","🚿","💡","🧺",
+  // Transport
+  "🚗","⛽","🚌","🚲","✈️","🚕","🛵","🅿️",
+  // Shopping & Fashion
+  "🛍️","👗","👟","💄","👜","🕶️","💎","🧢",
+  // Health & Fitness
+  "🏥","💊","🏋️","🧘","🦷","👁️","💪","🩺",
+  // Education & Work
+  "🎓","📚","💻","📱","🖥️","📝","💼","🧑‍💻",
+  // Entertainment
+  "🎮","🎬","🎵","🎭","🎪","🎯","🎲","🎸",
+  // Kids & Pets
+  "👶","🐾","🐕","🐈","🧸","🍼","🎒","🧩",
+  // Travel & Outdoors
+  "🏖️","⛷️","🏕️","🗺️","🧳","🏔️","⛵","🎣",
+  // Finance & Giving
+  "💰","🎁","💳","🏦","📦","🎗️","⛪","💝",
+  // Misc
+  "📋","🔑","📸","🎂","💐","🧴","🪥","●",
+];
 
 // ── Smart Categorization ──
 const KEYWORD_MAP = {
@@ -611,13 +634,8 @@ function BudgetVsActual({ entries, envelopes, nodes, nodeId }) {
   );
 }
 
-// ── Budget Alerts ──
-function BudgetAlerts({ nodeId, entries, limits }) { const alerts = []; allCats().filter(c => c.id !== "income").forEach(cat => { const k = `${nodeId}-${cat.id}`; const lim = limits[k]; if (!lim || lim <= 0) return; const spent = entries.filter(e => e.nodeId === nodeId && e.category === cat.id && e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0); const pct = (spent / lim) * 100; if (pct >= 100) alerts.push({ cat, pct, spent, lim, type: "over" }); else if (pct >= 80) alerts.push({ cat, pct, spent, lim, type: "warning" }); }); if (!alerts.length) return null; return (<div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>{alerts.map(a => (<div key={a.cat.id} style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 500, background: a.type === "over" ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.12)", color: a.type === "over" ? "#ef4444" : "#f59e0b", border: `1px solid ${a.type === "over" ? "rgba(239,68,68,0.2)" : "rgba(245,158,11,0.2)"}` }}>{a.type === "over" ? "⚠ " : "⚡ "}<strong>{a.cat.label}</strong>: {fmt(a.spent)} of {fmt(a.lim)} ({Math.round(a.pct)}%){a.type === "over" ? " — over budget!" : " — nearing limit"}</div>))}</div>); }
 
 
-
-// ── Limits Panel ──
-function LimitsPanel({ nodeId, entries, limits, setLimit, removeLimit }) { const cats = allCats().filter(c => c.id !== "income"); const ne = entries.filter(e => e.nodeId === nodeId && e.type === "expense" && e.paid !== false); return (<div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Category Limits</div><div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{cats.map(cat => { const key = `${nodeId}-${cat.id}`; const lim = limits[key]||0; const spent = ne.filter(e => e.category === cat.id).reduce((s,e) => s+e.amount, 0); const pct = lim > 0 ? Math.min((spent/lim)*100,100) : 0; const over = lim > 0 && spent > lim; const warn = pct >= 80 && !over; return (<div key={cat.id}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}><span style={{ fontSize: 13, width: 22, textAlign: "center", color: cat.color }}>{cat.icon}</span><span style={{ fontSize: 11, color: T().textSub, flex: 1 }}>{cat.label}</span><span style={{ fontSize: 10, fontFamily: T().mono, color: T().textMuted }}>Spent: {fmt(spent)}</span><div style={{ position: "relative", width: 64 }}><span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", color: "#475569", fontSize: 10, fontFamily: T().mono }}>$</span><input type="number" min="0" step="50" value={lim||""} onChange={e => { const v = parseFloat(e.target.value)||0; if (v > 0) setLimit(key,v); else removeLimit(key); }} placeholder="Limit" style={{ width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "4px 6px 4px 18px", color: T().text, fontSize: 11, fontFamily: T().mono, outline: "none", textAlign: "right" }} /></div></div>{lim > 0 && <div style={{ height: 6, background: "#1a1a2e", borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: over ? "#ef4444" : warn ? "#f59e0b" : cat.color, borderRadius: 3, transition: "width 0.5s ease" }} /></div>}</div>); })}</div></div>); }
 
 // ── Category Manager ──
 function CategoryManager({ customCategories = [], onAdd, onRemove }) {
@@ -649,10 +667,10 @@ function CategoryManager({ customCategories = [], onAdd, onRemove }) {
             style={{ background: T().inputBg, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "6px 10px", color: T().text, fontSize: 13, outline: "none" }} />
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <span style={{ fontSize: 11, color: T().textMuted }}>Icon:</span>
-            <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flex: 1 }}>
-              {ICONS.slice(0, 12).map(ic => (
+            <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flex: 1, maxHeight: 120, overflowY: "auto", padding: "2px 0" }}>
+              {ICONS.map(ic => (
                 <button key={ic} onClick={() => setForm({ ...form, icon: ic })}
-                  style={{ width: 26, height: 26, borderRadius: 5, border: form.icon === ic ? "2px solid #818cf8" : "1px solid rgba(255,255,255,0.08)", background: form.icon === ic ? "rgba(99,102,241,0.15)" : "rgba(255,255,255,0.03)", color: T().text, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>{ic}</button>
+                  style={{ width: 30, height: 30, borderRadius: 6, border: form.icon === ic ? "2px solid #818cf8" : "1px solid rgba(255,255,255,0.08)", background: form.icon === ic ? "rgba(99,102,241,0.15)" : "rgba(255,255,255,0.03)", color: T().text, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0 }}>{ic}</button>
               ))}
             </div>
           </div>
@@ -675,7 +693,7 @@ function CategoryManager({ customCategories = [], onAdd, onRemove }) {
 
 // ── Entry Row ──
 function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle, allEntries }) {
-  const cat = allCats().find(c => c.id === entry.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const isInc = entry.type === "income";
+  const cat = allCats().find(c => c.id === entry.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const isInc = entry.type === "income"; const isPaid = entry.paid !== false;
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
   const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
   const onTS = e => { ts.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; setSwiping(false); };
@@ -716,9 +734,9 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
   return (
     <div style={{ position: "relative", overflow: "hidden", borderRadius: 10 }}>
       <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 210, display: "flex", borderRadius: "0 10px 10px 0" }}>
-        <button onClick={() => { onUpdate(entry.id, { paid: !entry.paid }); haptic(); setSwipeX(0); }}
-          style={{ flex: 1, background: entry.paid ? "#475569" : "#22c55e", border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
-          {entry.paid ? "✓" : "○"}<span style={{ fontSize: 9 }}>{entry.paid ? "Unpay" : "Paid"}</span>
+        <button onClick={() => { onUpdate(entry.id, { paid: isPaid ? false : true }); haptic(); setSwipeX(0); }}
+          style={{ flex: 1, background: isPaid ? "#475569" : "#22c55e", border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+          {isPaid ? "↩" : "✓"}<span style={{ fontSize: 9 }}>{isPaid ? "Unpay" : "Pay"}</span>
         </button>
         <button onClick={() => { onDuplicate(entry); haptic(); setSwipeX(0); }}
           style={{ flex: 1, background: T().accent, border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
@@ -730,15 +748,15 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         </button>
       </div>
       <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onClick={() => { if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
-        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: T().row, borderRadius: 10, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: T().row, borderRadius: 10, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1, opacity: isPaid ? 0.55 : 1 }}>
         <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDark, fontSize: 14, padding: "12px 10px", margin: "-10px -4px -10px -6px", touchAction: "none", userSelect: "none", flexShrink: 0 }}>⠿</div>
-        <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: 0.7, flexShrink: 0 }}>{cat.icon}</span>
+        <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: isPaid ? 0.5 : 0.85, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 500, color: entry.paid ? T().text : T().textMuted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{!entry.paid && <span style={{ fontSize: 9, color: T().textDim, marginRight: 4, fontWeight: 600, verticalAlign: "middle" }}>○</span>}{entry.label || "(untitled)"}</div>
-          <div style={{ fontSize: 11, color: T().textMuted, marginTop: 1 }}>{cat.label} · {entry.date}{entry.tags?.length > 0 && <span style={{ marginLeft: 4, color: T().accentLight }}>{entry.tags.map(t => `#${t}`).join(" ")}</span>}</div>
+          <div style={{ fontSize: isInc ? 15 : 14, fontWeight: 500, color: isPaid ? T().textMuted : "#f1f5f9", textDecoration: isPaid ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}</div>
+          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>{cat.label} · {entry.date}{entry.tags?.length > 0 && <span style={{ marginLeft: 4, color: T().accentLight }}>{entry.tags.map(t => `#${t}`).join(" ")}</span>}</div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: 14, color: isInc ? T().inc : T().exp, opacity: entry.paid ? 1 : 0.5 }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
+          <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: isInc ? 15 : 14, color: isInc ? T().inc : T().exp, opacity: isPaid ? 0.5 : 1, textDecoration: isPaid ? "line-through" : "none" }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
           {runningBalance !== undefined && <div style={{ fontFamily: T().mono, fontSize: 10, color: runningBalance >= 0 ? `${T().inc}80` : `${T().exp}80`, marginTop: 1 }}>{fmt(runningBalance)}</div>}
         </div>
       </div>
@@ -758,16 +776,16 @@ function DonutChart({ entries }) {
     <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
       <svg width={100} height={100} viewBox="0 0 100 100">
         {segs.map((s, i) => (<circle key={i} cx={50} cy={50} r={R} fill="none" stroke={s.color} strokeWidth={14} strokeDasharray={s.da} strokeDashoffset={s.doff} transform="rotate(-90 50 50)" />))}
-        <text x="50" y="48" textAnchor="middle" fill="#e2e8f0" fontSize="11" fontWeight="700" fontFamily="'JetBrains Mono', monospace">{fmt(tot).replace(".00", "")}</text>
-        <text x="50" y="60" textAnchor="middle" fill="#64748b" fontSize="7">spent</text>
+        <text x="50" y="48" textAnchor="middle" fill="#f8fafc" fontSize="11" fontWeight="700" fontFamily="'JetBrains Mono', monospace">{fmt(tot).replace(".00", "")}</text>
+        <text x="50" y="60" textAnchor="middle" fill="#94a3b8" fontSize="7">spent</text>
       </svg>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {byC.map(a => (
-          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: T().textSub }}>
+          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#cbd5e1" }}>
             <div style={{ width: 8, height: 8, borderRadius: 2, background: a.color, flexShrink: 0 }} />
             <span>{a.label}</span>
-            <span style={{ color: T().textMuted, fontFamily: T().mono }}>{fmt(a.total)}</span>
-            <span style={{ color: "#475569", fontFamily: T().mono, fontSize: 10 }}>{Math.round((a.total / tot) * 100)}%</span>
+            <span style={{ color: "#94a3b8", fontFamily: T().mono }}>{fmt(a.total)}</span>
+            <span style={{ color: "#64748b", fontFamily: T().mono, fontSize: 10 }}>{Math.round((a.total / tot) * 100)}%</span>
           </div>
         ))}
       </div>
@@ -1111,20 +1129,15 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
   );
 }
 
-// ── Envelope Settings (in Limits & Recurring tab) — now just a pointer ──
-function EnvelopeSettings({ nodeId, envelopes, nodes, entries, setEnvelope, removeEnvelope }) {
-  return <EnvelopeSection nodeId={nodeId} envelopes={envelopes} entries={entries} nodes={nodes} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />;
-}
 
 // ══════════════════════════════════════════════════
 // NODE PAGE
 // ══════════════════════════════════════════════════
-function NodePage({ node, parentName, nodes, entries, limits, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, setLimit, removeLimit, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
+function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState("overview");
   const [showArchived, setShowArchived] = useState(false);
   const [showTxn, setShowTxn] = useState(true);
   const fileRef = useRef(null);
@@ -1149,14 +1162,6 @@ function NodePage({ node, parentName, nodes, entries, limits, customCategories, 
     for (const [catId, env] of Object.entries(srcEnvs)) {
       if (env && env.cap > 0) {
         setEnvelope(newId, catId, { cap: env.cap });
-      }
-    }
-    // Copy category limits
-    const srcLimitKeys = Object.keys(limits).filter(k => k.startsWith(copyingFrom + "-"));
-    for (const key of srcLimitKeys) {
-      const catId = key.split("-").slice(1).join("-");
-      if (limits[key] > 0) {
-        setLimit(`${newId}-${catId}`, limits[key]);
       }
     }
     setCopyingFrom(null);
@@ -1198,18 +1203,9 @@ function NodePage({ node, parentName, nodes, entries, limits, customCategories, 
               setEnvelope={setEnvelope}
               removeEnvelope={removeEnvelope}
             />
-            <BudgetAlerts nodeId={node.id} entries={entries} limits={limits} />
           </>
         )}
       </div>
-
-      {!isFolderMode && (
-        <div style={{ display: "flex", gap: 4, padding: "0 20px", marginBottom: 12 }}>
-          {[{ id: "overview", label: "Overview" }, { id: "settings", label: "⚙ Limits & Recurring" }].map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, background: tab === t.id ? "rgba(99,102,241,0.15)" : "rgba(255,255,255,0.03)", color: tab === t.id ? "#818cf8" : "#64748b", transition: "all 0.2s" }}>{t.label}</button>
-          ))}
-        </div>
-      )}
 
       <div style={{ padding: "0 20px 120px" }}>
         {isFolderMode ? (
@@ -1242,7 +1238,7 @@ function NodePage({ node, parentName, nodes, entries, limits, customCategories, 
               <div style={{ marginTop: 8, animation: "slideIn 0.2s ease" }}>
                 <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 6 }}>
                   Copying from: <strong style={{ color: T().text }}>{nodes.find(n => n.id === copyingFrom)?.name || "Budget"}</strong>
-                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(envelopes, limits, recurring — no transactions)</span>
+                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(envelopes, recurring — no transactions)</span>
                 </div>
                 <InlineNew placeholder="New budget name (e.g. May 2026)" accentColor={color} icon={<div style={{ width: 8 }} />}
                   onCommit={name => handleCopyBudget(name)} onCancel={() => setCopyingFrom(null)} />
@@ -1259,14 +1255,6 @@ function NodePage({ node, parentName, nodes, entries, limits, customCategories, 
               onCommit={name => { addNode({ id: uid(), parentId: node.id, name, color: PALETTE[children.length % PALETTE.length] }); setAddingChild(false); haptic(); }} onCancel={() => setAddingChild(false)} /></div>}
             <BottomBar><Btn onClick={() => setAddingChild(true)} bg={`${color}25`} color={color}>+ New Sub-budget</Btn></BottomBar>
           </>
-        ) : tab === "settings" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            {/* Envelope config */}
-            <EnvelopeSettings nodeId={node.id} envelopes={envelopes} nodes={nodes} entries={entries} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />
-            <LimitsPanel nodeId={node.id} entries={entries} limits={limits} setLimit={setLimit} removeLimit={removeLimit} />
-            <CategoryManager customCategories={customCategories || []} onAdd={addCategory} onRemove={removeCategory} />
-            <div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Import / Export</div><div style={{ display: "flex", gap: 8 }}><button onClick={() => exportCSV(directEntries, node.name)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↓ Export CSV</button><button onClick={() => fileRef.current?.click()} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↑ Import CSV</button><input ref={fileRef} type="file" accept=".csv" onChange={handleImport} style={{ display: "none" }} /></div></div>
-          </div>
         ) : (
           <>
             <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}><DonutChart entries={directEntries} /></div>
@@ -1280,7 +1268,7 @@ function NodePage({ node, parentName, nodes, entries, limits, customCategories, 
 
             {showTxn && (
               <>
-                {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
+                {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add income or expenses below"} /> : (
                   <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
                     <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
                   )} />
@@ -1291,6 +1279,7 @@ function NodePage({ node, parentName, nodes, entries, limits, customCategories, 
               <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
               <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
             </div>
+            <div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Import / Export</div><div style={{ display: "flex", gap: 8 }}><button onClick={() => exportCSV(directEntries, node.name)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↓ Export CSV</button><button onClick={() => fileRef.current?.click()} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↑ Import CSV</button><input ref={fileRef} type="file" accept=".csv" onChange={handleImport} style={{ display: "none" }} /></div></div>
           </>
         )}
       </div>
@@ -1457,6 +1446,11 @@ export default function App({ user, householdId }) {
               ))}
             </div>
 
+            {/* Custom Categories */}
+            <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
+              <CategoryManager customCategories={d.customCategories || []} onAdd={app.addCategory} onRemove={app.removeCategory} />
+            </div>
+
             {/* Household code */}
             <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -1499,9 +1493,9 @@ export default function App({ user, householdId }) {
   }
 
   return shell(
-    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} limits={d.limits} customCategories={d.customCategories} envelopes={d.envelopes} displayPrefs={displayPrefs}
+    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} customCategories={d.customCategories} envelopes={d.envelopes} displayPrefs={displayPrefs}
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
-      setLimit={app.setLimit} removeLimit={app.removeLimit} addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc} />
+      addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc} />
   );
 }
