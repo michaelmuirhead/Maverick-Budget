@@ -129,8 +129,8 @@ function processRecurrings(data) {
 
 // ── CSV ──
 function exportCSV(entries, name) {
-  const rows = [["Date","Label","Category","Type","Amount","Tags"]];
-  entries.forEach(e => { const c = allCats().find(x => x.id === e.category); rows.push([e.date, e.label, c?.label || e.category, e.type, e.type === "income" ? e.amount : -e.amount, (e.tags || []).join(";")]); });
+  const rows = [["Date","Label","Category","Type","Amount"]];
+  entries.forEach(e => { const c = allCats().find(x => x.id === e.category); rows.push([e.date, e.label, c?.label || e.category, e.type, e.type === "income" ? e.amount : -e.amount]); });
   const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
   const b = new Blob([csv], { type: "text/csv" }); const u = URL.createObjectURL(b);
   const a = document.createElement("a"); a.href = u; a.download = `${name || "maverick"}-export.csv`; a.click(); URL.revokeObjectURL(u);
@@ -138,7 +138,7 @@ function exportCSV(entries, name) {
 function parseCSV(text) {
   const lines = text.trim().split("\n").map(l => { const r = []; let cur = "", inQ = false; for (let i = 0; i < l.length; i++) { const ch = l[i]; if (ch === '"') inQ = !inQ; else if (ch === "," && !inQ) { r.push(cur.trim()); cur = ""; } else cur += ch; } r.push(cur.trim()); return r; });
   if (lines.length < 2) return [];
-  return lines.slice(1).map(r => { const amt = Math.abs(parseFloat(r[4]) || 0); const type = parseFloat(r[4]) >= 0 ? "income" : "expense"; const cl = (r[2]||"").toLowerCase(); const cat = allCats().find(c => c.label.toLowerCase() === cl) ||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const tags = r[5] ? r[5].split(";").filter(Boolean) : []; return { label: r[1] || "(imported)", category: type === "income" ? "income" : cat.id, type, amount: amt, date: r[0] || todayStr(), tags }; }).filter(e => e.amount > 0);
+  return lines.slice(1).map(r => { const amt = Math.abs(parseFloat(r[4]) || 0); const type = parseFloat(r[4]) >= 0 ? "income" : "expense"; const cl = (r[2]||"").toLowerCase(); const cat = allCats().find(c => c.label.toLowerCase() === cl) ||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; return { label: r[1] || "(imported)", category: type === "income" ? "income" : cat.id, type, amount: amt, date: r[0] || todayStr() }; }).filter(e => e.amount > 0);
 }
 
 // ── State with Firebase Sync ──
@@ -146,7 +146,7 @@ import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermissi
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
 
-const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [], envelopes: {} };
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [], envelopes: {}, savingsGoals: [] };
 
 function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
@@ -163,7 +163,7 @@ function useApp(user, householdId) {
       if (skipNextRemote.current) { skipNextRemote.current = false; return; }
       if (snap.exists()) {
         const r = snap.data();
-        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], limits: r.limits||{}, customCategories: r.customCategories||[], envelopes: r.envelopes||{} }));
+        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], limits: r.limits||{}, customCategories: r.customCategories||[], envelopes: r.envelopes||{}, savingsGoals: r.savingsGoals||[] }));
       }
       setSynced(true);
     }, () => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {} setSynced(true); });
@@ -206,6 +206,9 @@ function useApp(user, householdId) {
       if (Object.keys(nodeEnvs).length === 0) delete envs[nodeId]; else envs[nodeId] = nodeEnvs;
       return { ...p, envelopes: envs };
     }), []),
+    addSavingsGoal: useCallback(g => up(p => ({ ...p, savingsGoals: [...(p.savingsGoals||[]), g] })), []),
+    updateSavingsGoal: useCallback((id, u) => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).map(g => g.id === id ? { ...g, ...u } : g) })), []),
+    removeSavingsGoal: useCallback(id => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).filter(g => g.id !== id) })), []),
     getDesc,
   };
 }
@@ -379,22 +382,6 @@ function ScrollContainer({ children }) {
       WebkitOverflowScrolling: "touch", overscrollBehavior: "none",
     }}>
       {children}
-    </div>
-  );
-}
-
-// ── Tags Input ──
-function TagsInput({ tags = [], onChange }) {
-  const [input, setInput] = useState("");
-  const addTag = (t) => { const v = t.trim().toLowerCase(); if (v && !tags.includes(v)) { onChange([...tags, v]); haptic(5); } setInput(""); };
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", paddingLeft: 34 }}>
-      <span style={{ fontSize: 11, color: T().textMuted }}>Tags:</span>
-      {tags.map(t => (
-        <span key={t} onClick={() => onChange(tags.filter(x => x !== t))} style={{ fontSize: 10, background: "rgba(99,102,241,0.2)", color: T().accentLight, borderRadius: 4, padding: "2px 6px", cursor: "pointer" }}>{t} ×</span>
-      ))}
-      <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(input); } }}
-        placeholder="add tag" style={{ background: "transparent", border: "none", color: T().text, fontSize: 11, outline: "none", width: 60, padding: "2px 0" }} />
     </div>
   );
 }
@@ -727,7 +714,6 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         <input ref={dRef} type="date" defaultValue={entry.dateISO||todayISO()} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", colorScheme: "dark" }} />
         {!isInc && (<><span style={{ fontSize: 11, color: T().textMuted, marginLeft: 4 }}>Category:</span><select defaultValue={entry.category} onChange={e => onUpdate(entry.id, { category: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>{allCats().filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}</select></>)}
       </div>
-      <TagsInput tags={entry.tags||[]} onChange={tags => onUpdate(entry.id, { tags })} />
     </div>
   );
 
@@ -753,7 +739,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: isPaid ? 0.5 : 0.85, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: isInc ? 15 : 14, fontWeight: 500, color: isPaid ? T().textMuted : "#f1f5f9", textDecoration: isPaid ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}</div>
-          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>{cat.label} · {entry.date}{entry.tags?.length > 0 && <span style={{ marginLeft: 4, color: T().accentLight }}>{entry.tags.map(t => `#${t}`).join(" ")}</span>}</div>
+          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>{cat.label} · {entry.date}</div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
           <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: isInc ? 15 : 14, color: isInc ? T().inc : T().exp, opacity: isPaid ? 0.5 : 1, textDecoration: isPaid ? "line-through" : "none" }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
@@ -1130,10 +1116,161 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
 }
 
 
+// ── Savings Goals ──
+function SavingsGoals({ goals = [], addGoal, updateGoal, removeGoal }) {
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: "", icon: "\u{1F3AF}", target: "" });
+  const [contributingId, setContributingId] = useState(null);
+  const [contributeAmt, setContributeAmt] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editTarget, setEditTarget] = useState("");
+
+  const handleAdd = () => {
+    const name = form.name.trim();
+    const target = parseFloat(form.target);
+    if (!name || !target || target <= 0) return;
+    addGoal({ id: uid(), name, icon: form.icon, target, balance: 0, createdAt: todayISO() });
+    setForm({ name: "", icon: "\u{1F3AF}", target: "" }); setAdding(false); haptic();
+  };
+
+  const handleContribute = (goalId) => {
+    const amt = parseFloat(contributeAmt);
+    if (!amt || amt <= 0) return;
+    const goal = goals.find(g => g.id === goalId);
+    if (!goal) return;
+    updateGoal(goalId, { balance: (goal.balance || 0) + amt });
+    setContributingId(null); setContributeAmt(""); haptic();
+  };
+
+  const handleEditTarget = (goalId) => {
+    const v = parseFloat(editTarget);
+    if (v > 0) updateGoal(goalId, { target: v });
+    setEditingId(null); setEditTarget("");
+  };
+
+  const totalSaved = goals.reduce((s, g) => s + (g.balance || 0), 0);
+  const totalTarget = goals.reduce((s, g) => s + (g.target || 0), 0);
+
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, rgba(6,182,212,0.06), rgba(6,182,212,0.01))",
+      border: "1px solid rgba(6,182,212,0.15)", borderRadius: 16, padding: "14px 16px", marginBottom: 14,
+    }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: goals.length > 0 ? 10 : 0 }}>
+        <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+          {"🏦"} Savings Goals
+        </div>
+        {goals.length > 0 && (
+          <div style={{ fontSize: 12, fontWeight: 700, fontFamily: T().mono, color: "#06b6d4" }}>
+            {fmt(totalSaved)} <span style={{ fontSize: 9, fontWeight: 500, color: T().textMuted }}>/ {fmt(totalTarget)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Goal rows */}
+      {goals.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 10 }}>
+          {goals.map(g => {
+            const pct = g.target > 0 ? Math.min((g.balance / g.target) * 100, 100) : 0;
+            const reached = g.balance >= g.target && g.target > 0;
+            return (
+              <div key={g.id}>
+                {editingId === g.id ? (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", animation: "slideIn 0.15s ease" }}>
+                    <span style={{ fontSize: 14, width: 22, textAlign: "center" }}>{g.icon}</span>
+                    <span style={{ fontSize: 12, color: T().text, fontWeight: 500, minWidth: 50 }}>{g.name}</span>
+                    <div style={{ position: "relative", flex: 1 }}>
+                      <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span>
+                      <input value={editTarget} onChange={e => setEditTarget(e.target.value.replace(/[^0-9.]/g, ""))} autoFocus inputMode="decimal"
+                        onKeyDown={e => { if (e.key === "Enter") handleEditTarget(g.id); if (e.key === "Escape") setEditingId(null); }}
+                        style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 6, padding: "6px 6px 6px 22px", color: T().text, fontSize: 12, fontFamily: T().mono, outline: "none" }} />
+                    </div>
+                    <button onClick={() => handleEditTarget(g.id)} style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: "#06b6d4", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Save</button>
+                    <button onClick={() => setEditingId(null)} style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 11, cursor: "pointer" }}>{"\u2715"}</button>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 }}>{g.icon}</span>
+                        <span style={{ fontSize: 12, color: T().text, fontWeight: 500 }}>{g.name}</span>
+                        <span style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{fmt(g.balance || 0)} / {fmt(g.target)}</span>
+                        {reached && <span style={{ fontSize: 8, color: "#fbbf24", fontWeight: 700, background: "rgba(251,191,36,0.12)", padding: "1px 5px", borderRadius: 3 }}>{"\u{1F389}"} Goal reached!</span>}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                        <span style={{ fontSize: 10, fontFamily: T().mono, fontWeight: 600, color: "#06b6d4" }}>{Math.round(pct)}%</span>
+                        <button onClick={() => { setContributingId(contributingId === g.id ? null : g.id); setContributeAmt(""); }} title="Contribute" style={{ background: "none", border: "none", color: contributingId === g.id ? "#06b6d4" : T().textDim, cursor: "pointer", fontSize: 12, padding: "2px 4px", fontWeight: 700 }}>+</button>
+                        <button onClick={() => { setEditingId(g.id); setEditTarget(String(g.target)); }} title="Edit target" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 11, padding: "2px 4px" }}>{"\u270E"}</button>
+                        <button onClick={() => { if (confirm(`Delete "${g.name}"?`)) { removeGoal(g.id); haptic(); } }} title="Delete" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}
+                          onMouseEnter={e => (e.currentTarget.style.color = T().exp)} onMouseLeave={e => (e.currentTarget.style.color = T().textDim)}>{"\u00D7"}</button>
+                      </div>
+                    </div>
+                    <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: reached ? "#fbbf24" : "#06b6d4", borderRadius: 3, transition: "width 0.4s ease" }} />
+                    </div>
+                    {/* Contribute inline */}
+                    {contributingId === g.id && (
+                      <div style={{ display: "flex", gap: 6, marginTop: 6, animation: "slideIn 0.15s ease" }}>
+                        <div style={{ position: "relative", flex: 1 }}>
+                          <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span>
+                          <input value={contributeAmt} onChange={e => setContributeAmt(e.target.value.replace(/[^0-9.]/g, ""))} autoFocus inputMode="decimal" placeholder="Amount"
+                            onKeyDown={e => { if (e.key === "Enter") handleContribute(g.id); if (e.key === "Escape") setContributingId(null); }}
+                            style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 6, padding: "6px 6px 6px 22px", color: T().text, fontSize: 12, fontFamily: T().mono, outline: "none" }} />
+                        </div>
+                        <button onClick={() => handleContribute(g.id)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "#06b6d4", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Add</button>
+                        <button onClick={() => setContributingId(null)} style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 11, cursor: "pointer" }}>{"\u2715"}</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add goal form */}
+      {adding ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, animation: "slideIn 0.15s ease", marginTop: goals.length > 0 ? 4 : 10 }}>
+          <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Goal name (e.g. Emergency Fund)"
+            style={{ background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 13, outline: "none" }} />
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: T().textMuted }}>Icon:</span>
+            <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flex: 1, maxHeight: 80, overflowY: "auto", padding: "2px 0" }}>
+              {["\u{1F3AF}","\u{1F3E6}","\u{1F4B0}","\u{1F3E0}","\u2708\uFE0F","\u{1F697}","\u{1F393}","\u{1F4BB}","\u{1F3E5}","\u{1F476}","\u{1F43E}","\u{1F48D}","\u{1F3D6}\uFE0F","\u{1F6E1}\uFE0F","\u{1F4C8}","\u{1F381}"].map(ic => (
+                <button key={ic} onClick={() => setForm({ ...form, icon: ic })}
+                  style={{ width: 28, height: 28, borderRadius: 6, border: form.icon === ic ? "2px solid #06b6d4" : "1px solid rgba(255,255,255,0.08)", background: form.icon === ic ? "rgba(6,182,212,0.15)" : "rgba(255,255,255,0.03)", cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0 }}>{ic}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ position: "relative", flex: 1 }}>
+              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 13, fontFamily: T().mono }}>$</span>
+              <input value={form.target} onChange={e => setForm({ ...form, target: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="Target amount" inputMode="decimal"
+                onKeyDown={e => { if (e.key === "Enter") handleAdd(); }}
+                style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 8px 8px 24px", color: T().text, fontSize: 13, fontFamily: T().mono, outline: "none" }} />
+            </div>
+            <button onClick={handleAdd} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "#06b6d4", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Create</button>
+            <button onClick={() => { setAdding(false); setForm({ name: "", icon: "\u{1F3AF}", target: "" }); }} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 12, cursor: "pointer" }}>{"\u2715"}</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} style={{
+          display: "block", width: "100%", padding: "8px 0", borderRadius: 8,
+          border: "1px dashed rgba(6,182,212,0.3)", background: "rgba(6,182,212,0.04)",
+          color: "#06b6d4", fontSize: 11, fontWeight: 600, cursor: "pointer",
+          marginTop: goals.length > 0 ? 0 : 10,
+        }}>+ Add Savings Goal</button>
+      )}
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════
 // NODE PAGE
 // ══════════════════════════════════════════════════
-function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
+function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1175,10 +1312,10 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
 
   let cumulative = 0; const rb = {};
   directEntries.forEach(e => { cumulative += e.type === "income" ? e.amount : -e.amount; rb[e.id] = cumulative; });
-  const filtered = search ? directEntries.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase()) || (e.tags||[]).some(t => t.includes(search.toLowerCase()))) : directEntries;
+  const filtered = search ? directEntries.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : directEntries;
 
-  const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: todayStr(), dateISO: todayISO(), tags: [], paid: false }); setEditingId(eid); setSearch(""); setTab("overview"); haptic(); };
-  const handleImport = (e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { parseCSV(ev.target.result).forEach(p => addEntry({ id: uid(), nodeId: node.id, ...p, dateISO: todayISO(), tags: p.tags || [], paid: false })); }; reader.readAsText(file); e.target.value = ""; };
+  const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: todayStr(), dateISO: todayISO(), paid: false }); setEditingId(eid); setSearch(""); setTab("overview"); haptic(); };
+  const handleImport = (e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { parseCSV(ev.target.result).forEach(p => addEntry({ id: uid(), nodeId: node.id, ...p, dateISO: todayISO(), paid: false })); }; reader.readAsText(file); e.target.value = ""; };
 
   return (
     <div style={{ animation: "fadeIn 0.3s ease" }}>
@@ -1215,6 +1352,8 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
             {displayPrefs.yearInReview && <YearInReview entries={allDescEntries} />}
             {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
             {displayPrefs.budgetVsActual && <BudgetVsActual entries={entries} envelopes={envelopes} nodes={nodes} nodeId={node.id} />}
+
+            <SavingsGoals goals={savingsGoals} addGoal={addSavingsGoal} updateGoal={updateSavingsGoal} removeGoal={removeSavingsGoal} />
 
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Sub-budgets ({children.length})</div>
             <DraggableList items={childStats} onReorder={ids => reorderNodes(node.id, ids)} renderItem={(c, _i, onDragHandle) => (
@@ -1513,6 +1652,7 @@ export default function App({ user, householdId }) {
     <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} customCategories={d.customCategories} envelopes={d.envelopes} displayPrefs={displayPrefs}
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
-      addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc} />
+      addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc}
+      savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal} />
   );
 }
