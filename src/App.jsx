@@ -748,7 +748,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         </button>
       </div>
       <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onClick={() => { if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
-        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: T().row, borderRadius: 10, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1, opacity: isPaid ? 0.55 : 1 }}>
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: T().row, borderRadius: 10, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
         <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDark, fontSize: 14, padding: "12px 10px", margin: "-10px -4px -10px -6px", touchAction: "none", userSelect: "none", flexShrink: 0 }}>⠿</div>
         <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: isPaid ? 0.5 : 0.85, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1257,6 +1257,23 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
           </>
         ) : (
           <>
+            {/* Budget Summary Card */}
+            {(() => { const tInc = directEntries.filter(e => e.type === "income").reduce((s, e) => s + e.amount, 0); const tExp = directEntries.filter(e => e.type === "expense").reduce((s, e) => s + e.amount, 0); const bal = tInc - tExp; return (
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1, background: "linear-gradient(135deg, rgba(34,197,94,0.1), rgba(34,197,94,0.03))", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 12, padding: "10px 12px", textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Income</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: T().mono, color: T().inc }}>{fmt(tInc)}</div>
+                </div>
+                <div style={{ flex: 1, background: "linear-gradient(135deg, rgba(239,68,68,0.1), rgba(239,68,68,0.03))", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 12, padding: "10px 12px", textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Expenses</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: T().mono, color: T().exp }}>{fmt(tExp)}</div>
+                </div>
+                <div style={{ flex: 1, background: `linear-gradient(135deg, ${bal >= 0 ? "rgba(34,197,94,0.08), rgba(34,197,94,0.02)" : "rgba(239,68,68,0.08), rgba(239,68,68,0.02)"})`, border: `1px solid ${bal >= 0 ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)"}`, borderRadius: 12, padding: "10px 12px", textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Balance</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: T().mono, color: bal >= 0 ? T().inc : T().exp }}>{bal >= 0 ? "+" : "−"}{fmt(Math.abs(bal))}</div>
+                </div>
+              </div>
+            ); })()}
             <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}><DonutChart entries={directEntries} /></div>
             {directEntries.length > 3 && <SearchBar value={search} onChange={setSearch} />}
 
