@@ -33,11 +33,11 @@ function checkEnvelopeAlerts(beforeData, afterData) {
     for (const [catId, env] of Object.entries(catEnvs)) {
       if (!env || !env.cap || env.cap <= 0) continue;
       const cap = env.cap;
-      const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense")
+      const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense" && e.paid !== false)
         .reduce((s, e) => s + e.amount, 0);
       const pct = (spent / cap) * 100;
 
-      const beforeSpent = beforeEntries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense")
+      const beforeSpent = beforeEntries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense" && e.paid !== false)
         .reduce((s, e) => s + e.amount, 0);
       const beforePct = cap > 0 ? (beforeSpent / cap) * 100 : 0;
 
