@@ -847,6 +847,7 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
   const [editingCat, setEditingCat] = useState(null);
   const [editCap, setEditCap] = useState("");
   const [showRollConfirm, setShowRollConfirm] = useState(false);
+  const [rollTargetId, setRollTargetId] = useState("");
 
   // Categories that already have an envelope (include rollover in total)
   const envRows = catIds.map(catId => {
@@ -869,32 +870,49 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
   const totalSpent = envRows.reduce((s, r) => s + r.spent, 0);
   const totalLeft = totalBudget - totalSpent;
 
-  // Find next sibling budget in the same parent folder for roll-forward
-  const findNextMonth = () => {
-    if (!nodes || nodes.length === 0) return null;
+  // Find sibling budgets in the same parent folder for roll-forward target picker
+  const getSiblingBudgets = () => {
+    if (!nodes || nodes.length === 0) return [];
+    const thisNode = nodes.find(n => n.id === nodeId);
+    if (!thisNode || !thisNode.parentId) return [];
+    return nodes.filter(n => n.parentId === thisNode.parentId && n.id !== nodeId && !n.archived);
+  };
+
+  const siblingBudgets = getSiblingBudgets();
+  // Default to next sibling if no target selected yet
+  const defaultTarget = (() => {
     const thisNode = nodes.find(n => n.id === nodeId);
     if (!thisNode || !thisNode.parentId) return null;
     const siblings = nodes.filter(n => n.parentId === thisNode.parentId);
     const myIdx = siblings.findIndex(s => s.id === nodeId);
-    if (myIdx < 0 || myIdx >= siblings.length - 1) return null;
-    return siblings[myIdx + 1];
-  };
+    return myIdx >= 0 && myIdx < siblings.length - 1 ? siblings[myIdx + 1] : null;
+  })();
+  const selectedTargetId = rollTargetId || (defaultTarget ? defaultTarget.id : "");
+  const rollTarget = siblingBudgets.find(s => s.id === selectedTargetId) || null;
 
-  const nextMonth = findNextMonth();
+  // Also resolve the rolled-to target for display (may differ from picker if already rolled)
+  const rolledToNode = (() => {
+    const rolledRow = envRows.find(r => r.rolled);
+    if (!rolledRow) return null;
+    const destId = (nodeEnvs[rolledRow.catId] || {}).rolledTo;
+    return destId ? nodes.find(n => n.id === destId) : null;
+  })();
+
   const rollableRows = envRows.filter(r => r.left > 0 && !r.rolled);
   const totalRollable = rollableRows.reduce((s, r) => s + r.left, 0);
   const anyRolled = envRows.some(r => r.rolled);
-  const canRoll = nextMonth && rollableRows.length > 0 && !anyRolled;
+  const canRoll = siblingBudgets.length > 0 && rollableRows.length > 0 && !anyRolled;
 
   const handleRollForward = () => {
+    if (!rollTarget) return;
     for (const row of rollableRows) {
       // Mark source as rolled
       const srcEnv = nodeEnvs[row.catId] || {};
-      setEnvelope(nodeId, row.catId, { ...srcEnv, rolledTo: nextMonth.id, rolledAmount: row.left });
+      setEnvelope(nodeId, row.catId, { ...srcEnv, rolledTo: rollTarget.id, rolledAmount: row.left });
       // Add rollover to destination — inherit cap if destination doesn't have this category
-      const destNodeEnvs = (envelopes || {})[nextMonth.id] || {};
+      const destNodeEnvs = (envelopes || {})[rollTarget.id] || {};
       const destEnv = destNodeEnvs[row.catId] || {};
-      setEnvelope(nextMonth.id, row.catId, {
+      setEnvelope(rollTarget.id, row.catId, {
         cap: destEnv.cap || row.cap,
         rollover: (destEnv.rollover || 0) + row.left,
         rolloverFrom: nodeId,
@@ -1017,18 +1035,29 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
           border: "1px dashed rgba(34,197,94,0.3)", background: "rgba(34,197,94,0.04)",
           color: T().inc, fontSize: 11, fontWeight: 600, cursor: "pointer",
         }}>
-          Roll forward {fmt(totalRollable)} → {nextMonth.name} →
+          Roll forward {fmt(totalRollable)} →
         </button>
       )}
 
-      {/* Roll confirm */}
-      {showRollConfirm && nextMonth && (
+      {/* Roll confirm with target picker */}
+      {showRollConfirm && (
         <div style={{
           background: "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
           border: `1px solid ${T().cardBorder}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8,
           animation: "slideIn 0.2s ease",
         }}>
-          <div style={{ fontSize: 12, color: T().text, fontWeight: 600, marginBottom: 6 }}>Roll forward to {nextMonth.name}?</div>
+          <div style={{ fontSize: 12, color: T().text, fontWeight: 600, marginBottom: 8 }}>Roll forward to:</div>
+
+          {/* Target picker dropdown */}
+          <select value={selectedTargetId} onChange={e => setRollTargetId(e.target.value)} style={{
+            width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`,
+            borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 12, outline: "none", marginBottom: 10,
+            appearance: "auto",
+          }}>
+            <option value="">Select target budget...</option>
+            {siblingBudgets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+
           <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 8, lineHeight: 1.5 }}>
             {rollableRows.map(r => (
               <div key={r.catId} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
@@ -1041,10 +1070,11 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={handleRollForward} style={{
+            <button onClick={handleRollForward} disabled={!rollTarget} style={{
               flex: 1, padding: "9px 0", borderRadius: 8, border: "none",
-              background: T().inc, color: "#0a0a1a", fontSize: 12, fontWeight: 700, cursor: "pointer",
-            }}>Roll → {nextMonth.name}</button>
+              background: rollTarget ? T().inc : "rgba(255,255,255,0.08)", color: rollTarget ? "#0a0a1a" : T().textDim,
+              fontSize: 12, fontWeight: 700, cursor: rollTarget ? "pointer" : "default", opacity: rollTarget ? 1 : 0.5,
+            }}>Roll → {rollTarget ? rollTarget.name : "..."}</button>
             <button onClick={() => setShowRollConfirm(false)} style={{
               padding: "9px 14px", borderRadius: 8, border: `1px solid ${T().cardBorder}`,
               background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer",
@@ -1054,14 +1084,14 @@ function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, remov
       )}
 
       {/* Rolled badge with undo */}
-      {anyRolled && nextMonth && (
+      {anyRolled && (
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", marginBottom: 8,
           background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 8,
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 11 }}>✓</span>
-            <span style={{ fontSize: 11, color: T().inc, fontWeight: 600 }}>Rolled forward to {nextMonth.name}</span>
+            <span style={{ fontSize: 11, color: T().inc, fontWeight: 600 }}>Rolled forward to {rolledToNode ? rolledToNode.name : "another budget"}</span>
           </div>
           <button onClick={handleUnroll} style={{
             background: "none", border: `1px solid rgba(34,197,94,0.3)`, borderRadius: 6,
@@ -1115,6 +1145,7 @@ function EnvelopeSettings({ nodeId, envelopes, nodes, entries, setEnvelope, remo
 // ══════════════════════════════════════════════════
 function NodePage({ node, parentName, nodes, entries, recurrings, limits, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addRecurring, updateRecurring, removeRecurring, setLimit, removeLimit, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
   const [addingChild, setAddingChild] = useState(false);
+  const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("overview");
@@ -1130,6 +1161,36 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
   const { inc, exp, balance } = getNodeBalance(nodes, entries, node.id);
   const color = node.color || "#6366f1";
   const childStats = children.map(c => ({ ...c, ...getNodeBalance(nodes, entries, c.id), childCount: nodes.filter(n => n.parentId === c.id).length }));
+
+  // Copy budget: duplicate envelope structure (caps only, no entries/rollover state)
+  const handleCopyBudget = (name) => {
+    if (!copyingFrom || !name.trim()) { setCopyingFrom(null); return; }
+    const newId = uid();
+    const srcNode = nodes.find(n => n.id === copyingFrom);
+    addNode({ id: newId, parentId: node.id, name: name.trim(), color: srcNode?.color || PALETTE[children.length % PALETTE.length] });
+    // Copy envelopes — caps only, strip rollover/rolled state
+    const srcEnvs = (envelopes || {})[copyingFrom] || {};
+    for (const [catId, env] of Object.entries(srcEnvs)) {
+      if (env && env.cap > 0) {
+        setEnvelope(newId, catId, { cap: env.cap });
+      }
+    }
+    // Copy category limits
+    const srcLimitKeys = Object.keys(limits).filter(k => k.startsWith(copyingFrom + "-"));
+    for (const key of srcLimitKeys) {
+      const catId = key.split("-").slice(1).join("-");
+      if (limits[key] > 0) {
+        setLimit(`${newId}-${catId}`, limits[key]);
+      }
+    }
+    // Copy recurring templates (not entries)
+    const srcRecurrings = (recurrings || []).filter(r => r.nodeId === copyingFrom);
+    for (const r of srcRecurrings) {
+      addRecurring({ ...r, id: uid(), nodeId: newId });
+    }
+    setCopyingFrom(null);
+    haptic();
+  };
 
   // All folders use the traditional folder view — envelopes live on leaf nodes (the monthly budgets)
 
@@ -1199,10 +1260,24 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
                 </div>
                 <span style={{ fontSize: 14, fontWeight: 600, fontFamily: T().mono, color: c.balance >= 0 ? "#22c55e" : "#ef4444" }}>{c.balance >= 0 ? "+" : "−"} {fmt(Math.abs(c.balance))}</span>
                 <span style={{ fontSize: 18, color: "#475569" }}>›</span>
+                <button onClick={e => { e.stopPropagation(); setCopyingFrom(c.id); haptic(); }} title="Copy budget" style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} onMouseEnter={e => (e.currentTarget.style.color = T().accentLight)} onMouseLeave={e => (e.currentTarget.style.color = "#475569")}>⧉</button>
                 <button onClick={e => { e.stopPropagation(); updateNode(c.id, { archived: !c.archived }); haptic(); }} title={c.archived ? "Unarchive" : "Archive"} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>{c.archived ? "↩" : "📦"}</button>
                 <button onClick={e => { e.stopPropagation(); if (confirm(`Delete "${c.name}"?`)) { removeNode(c.id); haptic(15); }}} style={{ background: "none", border: "none", color: "#334155", cursor: "pointer", fontSize: 16, padding: "2px 4px", borderRadius: 4, flexShrink: 0 }} onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")} onMouseLeave={e => (e.currentTarget.style.color = "#334155")}>×</button>
               </div>
             )} />
+
+            {/* Copy budget inline form */}
+            {copyingFrom && (
+              <div style={{ marginTop: 8, animation: "slideIn 0.2s ease" }}>
+                <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 6 }}>
+                  Copying from: <strong style={{ color: T().text }}>{nodes.find(n => n.id === copyingFrom)?.name || "Budget"}</strong>
+                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(envelopes, limits, recurring — no transactions)</span>
+                </div>
+                <InlineNew placeholder="New budget name (e.g. May 2026)" accentColor={color} icon={<div style={{ width: 8 }} />}
+                  onCommit={name => handleCopyBudget(name)} onCancel={() => setCopyingFrom(null)} />
+              </div>
+            )}
+
             {archivedCount > 0 && !showArchived && (
               <button onClick={() => setShowArchived(true)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: "#475569", fontSize: 11, cursor: "pointer" }}>Show {archivedCount} archived budget{archivedCount !== 1 ? "s" : ""}</button>
             )}
