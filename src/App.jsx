@@ -132,7 +132,7 @@ function parseCSV(text) {
 }
 
 // ── State with Firebase Sync ──
-import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS } from "./firebase";
+import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS, getDisplayPrefs, setDisplayPrefs, DEFAULT_DISPLAY_PREFS } from "./firebase";
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
 
@@ -392,7 +392,7 @@ function TagsInput({ tags = [], onChange }) {
   );
 }
 
-// ── Monthly Trends (bar chart for folder view) ──
+// ── Monthly Trends (enhanced bar chart for folder view) ──
 function MonthlyTrends({ entries }) {
   const months = {};
   entries.forEach(e => {
@@ -404,64 +404,225 @@ function MonthlyTrends({ entries }) {
   const sorted = Object.entries(months).sort((a, b) => a[0].localeCompare(b[0])).slice(-6);
   if (sorted.length < 2) return null;
   const maxVal = Math.max(...sorted.map(([, v]) => Math.max(v.inc, v.exp)), 1);
+  const fmtK = (n) => n >= 1000 ? `$${(n/1000).toFixed(1)}k` : `$${n.toFixed(0)}`;
 
   return (
-    <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}>
-      <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Monthly Trends</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 80 }}>
+    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
+      <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>Monthly Trends</div>
+      <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: T().inc }} /><span style={{ fontSize: 10, color: T().textMuted }}>Income</span></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: T().exp }} /><span style={{ fontSize: 10, color: T().textMuted }}>Expenses</span></div>
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 120, padding: "0 4px" }}>
         {sorted.map(([key, v]) => {
           const label = new Date(key + "-15").toLocaleDateString("en-US", { month: "short" });
-          const incH = (v.inc / maxVal) * 70;
-          const expH = (v.exp / maxVal) * 70;
+          const incH = (v.inc / maxVal) * 100;
+          const expH = (v.exp / maxVal) * 100;
+          const net = v.inc - v.exp;
           return (
-            <div key={key} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-              <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 70 }}>
-                <div style={{ width: 8, height: Math.max(2, incH), background: "#22c55e", borderRadius: 2 }} />
-                <div style={{ width: 8, height: Math.max(2, expH), background: "#ef4444", borderRadius: 2 }} />
+            <div key={key} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+              <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 90, width: "100%" }}>
+                <div style={{ flex: 1, height: `${incH}%`, borderRadius: "4px 4px 0 0", background: `linear-gradient(180deg, ${T().inc}cc, ${T().inc}40)`, position: "relative" }}>
+                  <div style={{ position: "absolute", top: -16, width: "100%", textAlign: "center", fontSize: 8, color: T().textDim, fontFamily: T().mono }}>{fmtK(v.inc)}</div>
+                </div>
+                <div style={{ flex: 1, height: `${expH}%`, borderRadius: "4px 4px 0 0", background: `linear-gradient(180deg, ${T().exp}cc, ${T().exp}40)`, position: "relative" }}>
+                  <div style={{ position: "absolute", top: -16, width: "100%", textAlign: "center", fontSize: 8, color: T().textDim, fontFamily: T().mono }}>{fmtK(v.exp)}</div>
+                </div>
               </div>
-              <span style={{ fontSize: 9, color: T().textMuted }}>{label}</span>
+              <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600 }}>{label}</div>
+              <div style={{ fontSize: 9, fontFamily: T().mono, color: net >= 0 ? T().inc : T().exp, fontWeight: 600 }}>
+                {net >= 0 ? "+" : ""}{fmtK(net)}
+              </div>
             </div>
           );
         })}
-      </div>
-      <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "center" }}>
-        <span style={{ fontSize: 9, color: T().textMuted }}><span style={{ display: "inline-block", width: 8, height: 8, background: "#22c55e", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />Income</span>
-        <span style={{ fontSize: 9, color: T().textMuted }}><span style={{ display: "inline-block", width: 8, height: 8, background: "#ef4444", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />Expenses</span>
       </div>
     </div>
   );
 }
 
-// ── Year in Review ──
+// ── Year in Review (sparkline + summary) ──
 function YearInReview({ entries }) {
   const year = new Date().getFullYear();
   const yearEntries = entries.filter(e => e.dateISO && e.dateISO.startsWith(String(year)));
   if (yearEntries.length < 3) return null;
+
+  // Build monthly data for sparkline
+  const monthMap = {};
+  yearEntries.forEach(e => {
+    const key = e.dateISO.slice(0, 7);
+    if (!monthMap[key]) monthMap[key] = { inc: 0, exp: 0 };
+    if (e.type === "income") monthMap[key].inc += e.amount; else monthMap[key].exp += e.amount;
+  });
+  const sortedMonths = Object.entries(monthMap).sort((a, b) => a[0].localeCompare(b[0]));
+  if (sortedMonths.length < 2) return null;
+
+  let cumulative = 0;
+  const points = sortedMonths.map(([, v]) => { cumulative += (v.inc - v.exp); return cumulative; });
+  const maxP = Math.max(...points, 0);
+  const minP = Math.min(...points, 0);
+  const range = maxP - minP || 1;
+
   const totalInc = yearEntries.filter(e => e.type === "income").reduce((s, e) => s + e.amount, 0);
   const totalExp = yearEntries.filter(e => e.type === "expense").reduce((s, e) => s + e.amount, 0);
-  const topCats = allCats().filter(c => c.id !== "income").map(c => ({ ...c, total: yearEntries.filter(e => e.category === c.id && e.type === "expense").reduce((s, e) => s + e.amount, 0) })).filter(c => c.total > 0).sort((a, b) => b.total - a.total).slice(0, 3);
-  const months = new Set(yearEntries.map(e => e.dateISO.slice(0, 7)));
-  const avgMonth = months.size > 0 ? totalExp / months.size : 0;
+  const savingsRate = totalInc > 0 ? ((totalInc - totalExp) / totalInc * 100).toFixed(1) : "0.0";
+  const fmtS = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const w = 280, h = 60, pad = 4;
+  const step = (w - pad * 2) / (points.length - 1 || 1);
+  const pathPoints = points.map((p, i) => `${pad + i * step},${h - pad - ((p - minP) / range) * (h - pad * 2)}`);
+  const linePath = `M ${pathPoints.join(" L ")}`;
+  const areaPath = `${linePath} L ${pad + (points.length - 1) * step},${h - pad} L ${pad},${h - pad} Z`;
 
   return (
-    <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}>
-      <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>{year} Summary</div>
-      <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
-        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Income</div><div style={{ fontSize: 14, fontWeight: 600, color: T().inc, fontFamily: T().mono }}>+{fmt(totalInc)}</div></div>
-        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Spent</div><div style={{ fontSize: 14, fontWeight: 600, color: T().exp, fontFamily: T().mono }}>−{fmt(totalExp)}</div></div>
-        <div><div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Avg/mo</div><div style={{ fontSize: 14, fontWeight: 600, color: T().textSub, fontFamily: T().mono }}>{fmt(avgMonth)}</div></div>
+    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em" }}>{year} in Review</div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Net</div>
+            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T().mono, color: cumulative >= 0 ? T().inc : T().exp }}>
+              {cumulative >= 0 ? "+" : ""}{fmtS(cumulative)}
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Savings</div>
+            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T().mono, color: T().accentLight }}>{savingsRate}%</div>
+          </div>
+        </div>
       </div>
-      {topCats.length > 0 && (
-        <div>
-          <div style={{ fontSize: 10, color: "#475569", marginBottom: 4 }}>Top categories:</div>
-          {topCats.map(c => (
-            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: T().textSub, marginBottom: 2 }}>
-              <span style={{ color: c.color }}>{c.icon}</span> <span>{c.label}</span>
-              <span style={{ fontFamily: T().mono, color: T().textMuted, marginLeft: "auto" }}>{fmt(c.total)}</span>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 60 }}>
+        <defs>
+          <linearGradient id="yirAreaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={T().inc} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={T().inc} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        {minP < 0 && <line x1={pad} y1={h - pad - ((0 - minP) / range) * (h - pad * 2)} x2={w - pad} y2={h - pad - ((0 - minP) / range) * (h - pad * 2)} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4,4" />}
+        <path d={areaPath} fill="url(#yirAreaGrad)" />
+        <path d={linePath} fill="none" stroke={T().inc} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((p, i) => <circle key={i} cx={pad + i * step} cy={h - pad - ((p - minP) / range) * (h - pad * 2)} r="3.5" fill={T().inc} stroke="#0a0a1a" strokeWidth="1.5" />)}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 4px 0" }}>
+        {sortedMonths.map(([key], i) => <span key={i} style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{new Date(key + "-15").toLocaleDateString("en-US", { month: "short" })}</span>)}
+      </div>
+    </div>
+  );
+}
+
+// ── Category Breakdown (donut chart) ──
+function CategoryBreakdown({ entries }) {
+  const expEntries = entries.filter(e => e.type === "expense" && e.amount > 0);
+  if (expEntries.length < 2) return null;
+  const catTotals = {};
+  expEntries.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + e.amount; });
+  const cats = allCats();
+  const data = Object.entries(catTotals).map(([id, amount]) => {
+    const cat = cats.find(c => c.id === id) || { id, label: id, icon: "\u{1F4CB}", color: "#f97316" };
+    return { ...cat, amount };
+  }).sort((a, b) => b.amount - a.amount);
+  if (data.length < 2) return null;
+
+  const total = data.reduce((s, d) => s + d.amount, 0);
+  const cx = 60, cy = 60, r = 46, strokeW = 18;
+  const circumference = 2 * Math.PI * r;
+  let cumulativeOffset = 0;
+
+  return (
+    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
+      <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>Category Breakdown</div>
+      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+        <div style={{ position: "relative", width: 120, height: 120, flexShrink: 0 }}>
+          <svg viewBox="0 0 120 120" style={{ width: 120, height: 120, transform: "rotate(-90deg)" }}>
+            {data.map((d, i) => {
+              const pct = d.amount / total;
+              const dashLen = pct * circumference;
+              const gap = circumference - dashLen;
+              const offset = cumulativeOffset;
+              cumulativeOffset += dashLen;
+              return <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={d.color} strokeWidth={strokeW} strokeDasharray={`${dashLen} ${gap}`} strokeDashoffset={-offset} />;
+            })}
+          </svg>
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, fontFamily: T().mono, color: T().text }}>${total >= 1000 ? (total / 1000).toFixed(1) + "k" : total.toFixed(0)}</div>
+            <div style={{ fontSize: 8, color: T().textDim, textTransform: "uppercase", letterSpacing: "0.1em" }}>total</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 0 }}>
+          {data.slice(0, 7).map(d => (
+            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 6px", borderRadius: 6 }}>
+              <span style={{ fontSize: 12, width: 16, textAlign: "center" }}>{d.icon}</span>
+              <span style={{ fontSize: 11, color: T().text, fontWeight: 500, flex: 1 }}>{d.label}</span>
+              <span style={{ fontSize: 10, fontFamily: T().mono, color: T().textSub, fontWeight: 600 }}>{fmt(d.amount)}</span>
+              <span style={{ fontSize: 9, fontFamily: T().mono, color: T().textDim, width: 28, textAlign: "right" }}>{((d.amount / total) * 100).toFixed(0)}%</span>
             </div>
           ))}
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
+
+// ── Budget vs Actual (envelope caps vs real spending) ──
+function BudgetVsActual({ entries, envelopes, nodes, nodeId }) {
+  // Gather envelope caps from all child nodes (or this node)
+  const childIds = nodes.filter(n => n.parentId === nodeId).map(n => n.id);
+  const targetIds = childIds.length > 0 ? childIds : [nodeId];
+  const catTotals = {}; // { catId: { cap, actual } }
+
+  targetIds.forEach(nid => {
+    const nodeEnvs = (envelopes || {})[nid] || {};
+    for (const [catId, env] of Object.entries(nodeEnvs)) {
+      if (!env || !env.cap || env.cap <= 0) continue;
+      if (!catTotals[catId]) catTotals[catId] = { cap: 0, actual: 0 };
+      catTotals[catId].cap += env.cap;
+      const spent = entries.filter(e => e.nodeId === nid && e.category === catId && e.type === "expense").reduce((s, e) => s + e.amount, 0);
+      catTotals[catId].actual += spent;
+    }
+  });
+
+  const cats = allCats();
+  const data = Object.entries(catTotals).map(([catId, v]) => {
+    const cat = cats.find(c => c.id === catId) || { id: catId, label: catId, icon: "\u{1F4CB}", color: "#f97316" };
+    return { cat: cat.label, icon: cat.icon, color: cat.color, cap: v.cap, actual: v.actual };
+  }).sort((a, b) => b.cap - a.cap);
+
+  if (data.length === 0) return null;
+  const maxVal = Math.max(...data.map(d => Math.max(d.cap, d.actual)));
+  const fmtB = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
+      <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>Budget vs. Actual</div>
+      <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: "rgba(255,255,255,0.12)" }} /><span style={{ fontSize: 10, color: T().textMuted }}>Budget Cap</span></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: T().accent }} /><span style={{ fontSize: 10, color: T().textMuted }}>Actual Spent</span></div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {data.map((d, i) => {
+          const capPct = (d.cap / maxVal) * 100;
+          const actPct = (d.actual / maxVal) * 100;
+          const over = d.actual > d.cap;
+          return (
+            <div key={i}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: T().text }}>{d.icon} {d.cat}</span>
+                <span style={{ fontSize: 10, fontFamily: T().mono, color: over ? T().exp : T().inc, fontWeight: 600 }}>
+                  ${fmtB(d.actual)} / ${fmtB(d.cap)}
+                  {over && <span style={{ marginLeft: 4, fontSize: 9, color: T().exp }}>OVER</span>}
+                </span>
+              </div>
+              <div style={{ position: "relative", height: 12, borderRadius: 6, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                <div style={{ position: "absolute", left: `${capPct}%`, top: 0, bottom: 0, width: 2, background: "rgba(255,255,255,0.25)", zIndex: 2 }} />
+                <div style={{
+                  height: "100%", borderRadius: 6, width: `${Math.min(actPct, 100)}%`,
+                  background: over ? `linear-gradient(90deg, ${T().exp}aa, ${T().exp}66)` : `linear-gradient(90deg, ${T().accent}cc, ${T().accent}55)`,
+                }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -952,12 +1113,13 @@ function EnvelopeSettings({ nodeId, envelopes, nodes, entries, setEnvelope, remo
 // ══════════════════════════════════════════════════
 // NODE PAGE
 // ══════════════════════════════════════════════════
-function NodePage({ node, parentName, nodes, entries, recurrings, limits, customCategories, envelopes, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addRecurring, updateRecurring, removeRecurring, setLimit, removeLimit, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
+function NodePage({ node, parentName, nodes, entries, recurrings, limits, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addRecurring, updateRecurring, removeRecurring, setLimit, removeLimit, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc }) {
   const [addingChild, setAddingChild] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("overview");
   const [showArchived, setShowArchived] = useState(false);
+  const [showTxn, setShowTxn] = useState(true);
   const fileRef = useRef(null);
 
   const allChildren = nodes.filter(n => n.parentId === node.id);
@@ -1017,12 +1179,14 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
         </div>
       )}
 
-      <div style={{ padding: "0 0 0", display: "flex", flexDirection: "column", height: "calc(100vh - env(safe-area-inset-top, 0px))", overflow: "hidden" }}>
+      <div style={{ padding: "0 20px 120px" }}>
         {isFolderMode ? (
           /* ═══ FOLDER VIEW — lists child budgets to open ═══ */
-          <div style={{ padding: "0 20px 120px", flex: 1, overflowY: "auto", overscrollBehavior: "contain" }}>
-            <MonthlyTrends entries={allDescEntries} />
-            <YearInReview entries={allDescEntries} />
+          <>
+            {displayPrefs.monthlyTrends && <MonthlyTrends entries={allDescEntries} />}
+            {displayPrefs.yearInReview && <YearInReview entries={allDescEntries} />}
+            {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
+            {displayPrefs.budgetVsActual && <BudgetVsActual entries={entries} envelopes={envelopes} nodes={nodes} nodeId={node.id} />}
 
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Sub-budgets ({children.length})</div>
             <DraggableList items={childStats} onReorder={ids => reorderNodes(node.id, ids)} renderItem={(c, _i, onDragHandle) => (
@@ -1048,9 +1212,9 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
             {addingChild && <div style={{ marginTop: 8 }}><InlineNew placeholder="Sub-budget name" accentColor={color} icon={<div style={{ width: 8 }} />}
               onCommit={name => { addNode({ id: uid(), parentId: node.id, name, color: PALETTE[children.length % PALETTE.length] }); setAddingChild(false); haptic(); }} onCancel={() => setAddingChild(false)} /></div>}
             <BottomBar><Btn onClick={() => setAddingChild(true)} bg={`${color}25`} color={color}>+ New Sub-budget</Btn></BottomBar>
-          </div>
+          </>
         ) : tab === "settings" ? (
-          <div style={{ padding: "0 20px 40px", flex: 1, overflowY: "auto", overscrollBehavior: "contain", display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             {/* Envelope config */}
             <EnvelopeSettings nodeId={node.id} envelopes={envelopes} nodes={nodes} entries={entries} setEnvelope={setEnvelope} removeEnvelope={removeEnvelope} />
             <LimitsPanel nodeId={node.id} entries={entries} limits={limits} setLimit={setLimit} removeLimit={removeLimit} />
@@ -1060,21 +1224,27 @@ function NodePage({ node, parentName, nodes, entries, recurrings, limits, custom
           </div>
         ) : (
           <>
-            <div style={{ padding: "0 20px" }}>
-              <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}><DonutChart entries={directEntries} /></div>
-              {directEntries.length > 3 && <SearchBar value={search} onChange={setSearch} />}
-              <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</div>
-            </div>
-            <div style={{ flex: 1, overflowY: "auto", overscrollBehavior: "contain", padding: "0 20px", WebkitOverflowScrolling: "touch" }}>
-              {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
-                <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
-                  <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
-                )} />
-              )}
-              <div style={{ display: "flex", gap: 10, padding: "16px 0 24px" }}>
-                <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
-                <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
-              </div>
+            <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}><DonutChart entries={directEntries} /></div>
+            {directEntries.length > 3 && <SearchBar value={search} onChange={setSearch} />}
+
+            {/* Collapsible Transactions header */}
+            <button onClick={() => { setShowTxn(!showTxn); haptic(5); }} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "none", border: "none", cursor: "pointer", padding: "0 0 10px", marginBottom: 0 }}>
+              <span style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</span>
+              <span style={{ fontSize: 14, color: T().textMuted, transition: "transform 0.2s", transform: showTxn ? "rotate(0deg)" : "rotate(-90deg)" }}>▾</span>
+            </button>
+
+            {showTxn && (
+              <>
+                {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add transactions or tap ⚙ for recurring & CSV import"} /> : (
+                  <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
+                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
+                  )} />
+                )}
+              </>
+            )}
+            <div style={{ display: "flex", gap: 10, padding: "16px 0 24px" }}>
+              <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
+              <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
             </div>
           </>
         )}
@@ -1099,6 +1269,10 @@ export default function App({ user, householdId }) {
   const [notifPrefsLoaded, setNotifPrefsLoaded] = useState(false);
   useEffect(() => { if (user?.uid) { getNotificationPrefs(user.uid).then(p => { setNotifPrefs(p); setNotifPrefsLoaded(true); }); } }, [user?.uid]);
   const toggleNotifPref = async (key) => { const next = { ...notifPrefs, [key]: !notifPrefs[key] }; setNotifPrefs(next); if (user?.uid) await setNotificationPrefs(user.uid, next); };
+  const [displayPrefs, setDisplayPrefsState] = useState({ ...DEFAULT_DISPLAY_PREFS });
+  const [displayPrefsLoaded, setDisplayPrefsLoaded] = useState(false);
+  useEffect(() => { if (user?.uid) { getDisplayPrefs(user.uid).then(p => { setDisplayPrefsState(p); setDisplayPrefsLoaded(true); }); } }, [user?.uid]);
+  const toggleDisplayPref = async (key) => { const next = { ...displayPrefs, [key]: !displayPrefs[key] }; setDisplayPrefsState(next); if (user?.uid) await setDisplayPrefs(user.uid, next); };
   const t = THEMES[themeId] || THEMES.midnight;
   window.__THEME__ = themeId;
   const toggleTheme = () => { const next = themeId === "midnight" ? "ocean" : "midnight"; setThemeId(next); try { localStorage.setItem("maverick-theme", next); } catch {} window.__THEME__ = next; };
@@ -1211,6 +1385,33 @@ export default function App({ user, householdId }) {
               </div>
             )}
 
+            {/* Display Preferences */}
+            <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 16 }}>📊</span>
+                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Folder Charts</div><div style={{ fontSize: 10, color: t.textMuted }}>Per-user — won't affect your partner</div></div>
+              </div>
+              {displayPrefsLoaded && [
+                { key: "monthlyTrends", label: "Monthly Trends", sub: "Income vs expenses bar chart" },
+                { key: "yearInReview", label: "Year in Review", sub: "Cumulative savings sparkline" },
+                { key: "categoryBreakdown", label: "Category Breakdown", sub: "Expense donut chart" },
+                { key: "budgetVsActual", label: "Budget vs. Actual", sub: "Envelope caps vs real spending" },
+              ].map(({ key, label, sub }) => (
+                <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", marginLeft: 32 }}>
+                  <div><div style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{label}</div><div style={{ fontSize: 9, color: t.textMuted }}>{sub}</div></div>
+                  <button onClick={() => toggleDisplayPref(key)} style={{
+                    width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
+                    background: displayPrefs[key] ? t.accent : "rgba(255,255,255,0.1)",
+                  }}>
+                    <div style={{
+                      width: 16, height: 16, borderRadius: 8, background: "#fff", position: "absolute", top: 2, transition: "left 0.2s",
+                      left: displayPrefs[key] ? 18 : 2,
+                    }} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
             {/* Household code */}
             <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -1253,7 +1454,7 @@ export default function App({ user, householdId }) {
   }
 
   return shell(
-    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} recurrings={d.recurrings} limits={d.limits} customCategories={d.customCategories} envelopes={d.envelopes}
+    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} recurrings={d.recurrings} limits={d.limits} customCategories={d.customCategories} envelopes={d.envelopes} displayPrefs={displayPrefs}
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries} addRecurring={app.addRecurring} updateRecurring={app.updateRecurring} removeRecurring={app.removeRecurring}
       setLimit={app.setLimit} removeLimit={app.removeLimit} addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc} />

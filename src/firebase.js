@@ -101,6 +101,34 @@ export async function setNotificationPrefs(userId, prefs) {
 
 export { DEFAULT_NOTIFICATION_PREFS };
 
+// ── Display Preferences (per-user chart toggles) ──
+const DEFAULT_DISPLAY_PREFS = {
+  monthlyTrends: true,
+  yearInReview: true,
+  categoryBreakdown: true,
+  budgetVsActual: true,
+};
+
+export async function getDisplayPrefs(userId) {
+  try {
+    const snap = await getDoc(doc(db, "users", userId, "settings", "display"));
+    return snap.exists() ? { ...DEFAULT_DISPLAY_PREFS, ...snap.data() } : { ...DEFAULT_DISPLAY_PREFS };
+  } catch (e) {
+    console.error("Error loading display prefs:", e);
+    return { ...DEFAULT_DISPLAY_PREFS };
+  }
+}
+
+export async function setDisplayPrefs(userId, prefs) {
+  try {
+    await setDoc(doc(db, "users", userId, "settings", "display"), prefs);
+  } catch (e) {
+    console.error("Error saving display prefs:", e);
+  }
+}
+
+export { DEFAULT_DISPLAY_PREFS };
+
 export {
   onAuthStateChanged,
   signInWithEmailAndPassword,
