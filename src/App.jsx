@@ -742,8 +742,10 @@ function CategoryManager({ customCategories = [], onAdd, onRemove }) {
 }
 
 // ── Entry Row ──
-function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle, allEntries }) {
+function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle, allEntries, bankAccounts, onTogglePaid }) {
   const cat = allCats().find(c => c.id === entry.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const isInc = entry.type === "income"; const isPaid = entry.paid !== false;
+  const isTransfer = entry.type === "transfer";
+  const linkedAcct = entry.bankAccountId ? (bankAccounts || []).find(a => a.id === entry.bankAccountId) : null;
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
   const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
   const onTS = e => { ts.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; setSwiping(false); };
@@ -764,6 +766,25 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
   const commit = () => { const label = lRef.current?.value?.trim(), amount = parseFloat(aRef.current?.value), dateISO = dRef.current?.value; if (!label && (!amount || amount === 0)) { onRemove(entry.id); } else { const u = { label: label || "(untitled)", amount: amount || 0 }; if (dateISO) { u.dateISO = dateISO; u.date = fmtDate(dateISO); } autoCategory(); onUpdate(entry.id, u); } haptic(); onStopEdit(); };
   const kd = e => { if (e.key === "Enter") { if (e.target === lRef.current && aRef.current) aRef.current.focus(); else commit(); } if (e.key === "Escape") { if (!entry.label && entry.amount === 0) onRemove(entry.id); else onStopEdit(); } };
 
+  // Transfer entries are read-only (not editable)
+  if (isTransfer && !isEditing) {
+    const fromAcct = (bankAccounts || []).find(a => a.id === entry.transferFromId);
+    const toAcct = (bankAccounts || []).find(a => a.id === entry.transferToId);
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: `${T().accent}08`, borderRadius: 10, borderLeft: `3px solid ${T().accent}60` }}>
+        <span style={{ fontSize: 16, width: 24, textAlign: "center", flexShrink: 0 }}>↔</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: T().text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "Transfer"}</div>
+          <div style={{ fontSize: 11, color: T().textMuted, marginTop: 1 }}>{fromAcct?.name || "?"} → {toAcct?.name || "?"}{entry.date ? ` · ${entry.date}` : ""}</div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: 13, color: T().accent }}>{fmt(entry.amount)}</div>
+        </div>
+        <button onClick={() => { onRemove(entry.id); haptic(15); }} style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 14, padding: "2px 4px" }} onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = T().textDim}>×</button>
+      </div>
+    );
+  }
+
   if (isEditing) return (
     <div ref={rRef} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", background: T().inputBg, borderRadius: 10, animation: "slideIn 0.2s ease" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -776,6 +797,14 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         <span style={{ fontSize: 11, color: T().textMuted }}>Date:</span>
         <input ref={dRef} type="date" defaultValue={entry.dateISO||""} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", colorScheme: "dark" }} />
         {!isInc && (<><span style={{ fontSize: 11, color: T().textMuted, marginLeft: 4 }}>Category:</span><select defaultValue={entry.category} onChange={e => onUpdate(entry.id, { category: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>{allCats().filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}</select></>)}
+        {bankAccounts && bankAccounts.length > 0 && (
+          <><span style={{ fontSize: 11, color: T().textMuted, marginLeft: 4 }}>Account:</span>
+          <select value={entry.bankAccountId || ""} onChange={e => onUpdate(entry.id, { bankAccountId: e.target.value || null })}
+            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>
+            <option value="">None</option>
+            {bankAccounts.map(a => { const ti = ACCOUNT_TYPES.find(t => t.id === a.type); return <option key={a.id} value={a.id}>{ti?.icon || "🏦"} {a.name}</option>; })}
+          </select></>
+        )}
       </div>
     </div>
   );
@@ -783,7 +812,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
   return (
     <div style={{ position: "relative", overflow: "hidden", borderRadius: 10 }}>
       <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 210, display: "flex", borderRadius: "0 10px 10px 0" }}>
-        <button onClick={() => { onUpdate(entry.id, { paid: isPaid ? false : true }); haptic(); setSwipeX(0); }}
+        <button onClick={() => { if (onTogglePaid) onTogglePaid(entry); else onUpdate(entry.id, { paid: !isPaid }); haptic(); setSwipeX(0); }}
           style={{ flex: 1, background: isPaid ? "#475569" : "#22c55e", border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
           {isPaid ? "↩" : "✓"}<span style={{ fontSize: 9 }}>{isPaid ? "Unpay" : "Pay"}</span>
         </button>
@@ -802,7 +831,10 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: isPaid ? 0.5 : 0.85, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: isInc ? 15 : 14, fontWeight: 500, color: isPaid ? T().textMuted : "#f1f5f9", textDecoration: isPaid ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}</div>
-          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>{cat.label}{entry.date ? ` · ${entry.date}` : ""}</div>
+          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>
+            {cat.label}{entry.date ? ` · ${entry.date}` : ""}
+            {linkedAcct && <span style={{ marginLeft: 4, fontSize: 10, color: T().textDim }}>· {(ACCOUNT_TYPES.find(t => t.id === linkedAcct.type))?.icon || "🏦"} {linkedAcct.name}</span>}
+          </div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
           <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: isInc ? 15 : 14, color: isInc ? T().inc : T().exp, opacity: isPaid ? 0.5 : 1, textDecoration: isPaid ? "line-through" : "none" }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
@@ -1332,7 +1364,7 @@ function SavingsGoals({ goals = [], addGoal, updateGoal, removeGoal }) {
 
 // ══════════════════════════════════════════════════
 // ── Single Bank Account Card ──
-function BankAccountCard({ acct, onUpdate, onRemove }) {
+function BankAccountCard({ acct, onUpdate, onRemove, onSelect, isSelected }) {
   const [editingName, setEditingName] = useState(false);
   const [editingBalance, setEditingBalance] = useState(false);
   const nameRef = useRef(null);
@@ -1350,7 +1382,8 @@ function BankAccountCard({ acct, onUpdate, onRemove }) {
   const saveBalance = () => { const v = parseFloat(balRef.current?.value); if (!isNaN(v)) onUpdate(acct.id, { balance: v }); setEditingBalance(false); haptic(); };
 
   return (
-    <div style={{ background: `linear-gradient(135deg, ${typeInfo.color} 0%, ${typeInfo.color}cc 50%, ${typeInfo.color}99 100%)`, borderRadius: 16, padding: "18px 20px", position: "relative", overflow: "hidden", boxShadow: `0 8px 28px ${typeInfo.color}30`, marginBottom: 10 }}>
+    <div onClick={e => { if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON") return; if (onSelect) onSelect(acct.id); }}
+      style={{ background: `linear-gradient(135deg, ${typeInfo.color} 0%, ${typeInfo.color}cc 50%, ${typeInfo.color}99 100%)`, borderRadius: 16, padding: "18px 20px", position: "relative", overflow: "hidden", boxShadow: `0 8px 28px ${typeInfo.color}30`, marginBottom: 10, cursor: onSelect ? "pointer" : "default", outline: isSelected ? "2px solid white" : "none", outlineOffset: -2, transition: "outline 0.2s" }}>
       <div style={{ position: "absolute", top: "-30%", right: "-15%", width: 140, height: 140, borderRadius: "50%", background: "rgba(255,255,255,0.07)", pointerEvents: "none" }} />
 
       {/* Top row: name + type badge + close */}
@@ -1358,44 +1391,57 @@ function BankAccountCard({ acct, onUpdate, onRemove }) {
         {editingName ? (
           <input ref={nameRef} defaultValue={acct.name} onBlur={saveName} onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }} style={{ ...inputStyle, fontSize: 14, flex: 1, marginRight: 8 }} />
         ) : (
-          <div onClick={() => setEditingName(true)} style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: 500, cursor: "text", flex: 1 }}>{acct.name}</div>
+          <div onClick={e => { e.stopPropagation(); setEditingName(true); }} style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: 500, cursor: "text", flex: 1 }}>{acct.name}</div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>{typeInfo.label}</span>
           <span style={{ fontSize: 18 }}>{typeInfo.icon}</span>
-          <button onClick={() => { if (confirm(`Remove "${acct.name}"?`)) { onRemove(acct.id); haptic(15); } }} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 16, padding: "0 2px", lineHeight: 1 }}>×</button>
+          <button onClick={e => { e.stopPropagation(); if (confirm(`Remove "${acct.name}"?`)) { onRemove(acct.id); haptic(15); } }} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 16, padding: "0 2px", lineHeight: 1 }}>×</button>
         </div>
       </div>
 
       {/* Balance — animated */}
-      <div style={{ position: "relative", zIndex: 1 }}>
+      <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
         {editingBalance ? (
           <input ref={balRef} defaultValue={bal} type="number" onBlur={saveBalance} onKeyDown={e => { if (e.key === "Enter") saveBalance(); if (e.key === "Escape") setEditingBalance(false); }} style={{ ...inputStyle, fontSize: 28, fontWeight: 700, width: "100%" }} />
         ) : (
-          <div onClick={() => setEditingBalance(true)} style={{ cursor: "text" }}>
+          <div onClick={e => { e.stopPropagation(); setEditingBalance(true); }} style={{ cursor: "text" }}>
             <AnimatedCurrency value={displayBal}
               dollarStyle={{ fontSize: 30, fontWeight: 700, color: "white", fontFamily: T().mono }}
               centsStyle={{ fontSize: 18, fontWeight: 700, color: "rgba(255,255,255,0.65)", fontFamily: T().mono }} />
           </div>
         )}
+        {onSelect && <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontWeight: 500 }}>tap to view ›</span>}
       </div>
     </div>
   );
 }
 
-// ── Bank Accounts Panel (multi-account) ──
-function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount }) {
+// ── Bank Accounts Panel (multi-account with transfers, filtering, and type grouping) ──
+function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount, entries, onFilterByAccount, filteredAccountId, onTransfer }) {
   const [adding, setAdding] = useState(false);
+  const [transferring, setTransferring] = useState(false);
   const [formName, setFormName] = useState("");
   const [formType, setFormType] = useState("checking");
   const [formBalance, setFormBalance] = useState("0");
+  const [txFrom, setTxFrom] = useState("");
+  const [txTo, setTxTo] = useState("");
+  const [txAmount, setTxAmount] = useState("");
 
   const totalBalance = accounts.reduce((sum, a) => {
     const bal = a.balance || 0;
     return sum + (a.type === "credit" ? -Math.abs(bal) : bal);
   }, 0);
 
+  // Group by type
+  const typeGroups = ACCOUNT_TYPES.map(at => ({
+    ...at,
+    total: accounts.filter(a => a.type === at.id).reduce((s, a) => s + (a.balance || 0), 0),
+    count: accounts.filter(a => a.type === at.id).length,
+  })).filter(g => g.count > 0);
+
   const resetForm = () => { setFormName(""); setFormType("checking"); setFormBalance("0"); setAdding(false); };
+  const resetTransfer = () => { setTxFrom(""); setTxTo(""); setTxAmount(""); setTransferring(false); };
 
   if (accounts.length === 0 && !adding) {
     return (
@@ -1408,34 +1454,115 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount 
 
   return (
     <div style={{ marginBottom: 16 }}>
-      {/* Net Worth / Total bar */}
+      {/* Net Worth / Total bar with type breakdown */}
       {accounts.length > 0 && (
-        <div style={{ background: T().surface, border: `1px solid ${T().cardBorder}`, borderRadius: 14, padding: "14px 18px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 2 }}>Net Total</div>
-            <div style={{ fontFamily: T().mono }}>
-              <AnimatedCurrency value={totalBalance}
-                dollarStyle={{ fontSize: 22, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono }}
-                centsStyle={{ fontSize: 14, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono, opacity: 0.7 }} />
+        <div style={{ background: T().surface, border: `1px solid ${T().cardBorder}`, borderRadius: 14, padding: "14px 18px", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: typeGroups.length > 1 ? 8 : 0 }}>
+            <div>
+              <div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 2 }}>Net Total</div>
+              <div style={{ fontFamily: T().mono }}>
+                <AnimatedCurrency value={totalBalance}
+                  dollarStyle={{ fontSize: 22, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono }}
+                  centsStyle={{ fontSize: 14, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono, opacity: 0.7 }} />
+              </div>
             </div>
+            <div style={{ fontSize: 10, color: T().textDim }}>{accounts.length} account{accounts.length !== 1 ? "s" : ""}</div>
           </div>
-          <div style={{ fontSize: 10, color: T().textDim }}>{accounts.length} account{accounts.length !== 1 ? "s" : ""}</div>
+          {/* Type breakdown sub-lines */}
+          {typeGroups.length > 1 && (
+            <div style={{ display: "flex", gap: 12, paddingTop: 8, borderTop: `1px solid ${T().cardBorder}` }}>
+              {typeGroups.map(g => {
+                const display = g.id === "credit" ? -Math.abs(g.total) : g.total;
+                return (
+                  <div key={g.id} style={{ flex: 1 }}>
+                    <div style={{ fontSize: 9, color: T().textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>{g.icon} {g.label}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, fontFamily: T().mono, color: g.color }}>{fmt(display)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Individual account cards */}
-      {accounts.map(acct => (
-        <BankAccountCard key={acct.id} acct={acct} onUpdate={updateAccount} onRemove={removeAccount} />
+      {/* Filtered view header */}
+      {filteredAccountId && (() => {
+        const fa = accounts.find(a => a.id === filteredAccountId);
+        if (!fa) return null;
+        const ti = ACCOUNT_TYPES.find(t => t.id === fa.type) || ACCOUNT_TYPES[0];
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", background: `${ti.color}15`, border: `1px solid ${ti.color}30`, borderRadius: 10 }}>
+            <span style={{ fontSize: 16 }}>{ti.icon}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: T().text, flex: 1 }}>{fa.name} Transactions</span>
+            <button onClick={() => onFilterByAccount(null)} style={{ background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "4px 8px" }}>✕ Clear</button>
+          </div>
+        );
+      })()}
+
+      {/* Individual account cards — hide when filtered */}
+      {!filteredAccountId && accounts.map(acct => (
+        <BankAccountCard key={acct.id} acct={acct} onUpdate={updateAccount} onRemove={removeAccount} onSelect={onFilterByAccount} />
       ))}
+
+      {/* Transfer + Add buttons row */}
+      {!filteredAccountId && !adding && !transferring && accounts.length >= 2 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: accounts.length > 0 ? 0 : 8 }}>
+          <button onClick={() => setAdding(true)}
+            style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: `1px dashed ${T().accent}40`, background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }}
+            onMouseEnter={e => { e.currentTarget.style.background = `${T().accent}10`; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+            + Add Account
+          </button>
+          <button onClick={() => setTransferring(true)}
+            style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: `1px dashed ${T().accent}40`, background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }}
+            onMouseEnter={e => { e.currentTarget.style.background = `${T().accent}10`; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+            ↔ Transfer
+          </button>
+        </div>
+      )}
+
+      {/* Transfer form */}
+      {transferring && (
+        <div style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "16px 18px", animation: "slideIn 0.2s ease", marginTop: 8 }}>
+          <div style={{ fontSize: 13, color: T().text, fontWeight: 600, marginBottom: 10 }}>↔ Transfer Between Accounts</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: T().textMuted, marginBottom: 4 }}>From</div>
+              <select value={txFrom} onChange={e => setTxFrom(e.target.value)}
+                style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 6px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>
+                <option value="">Select...</option>
+                {accounts.filter(a => a.id !== txTo).map(a => { const ti = ACCOUNT_TYPES.find(t => t.id === a.type); return <option key={a.id} value={a.id}>{ti?.icon} {a.name}</option>; })}
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 8, fontSize: 16, color: T().textMuted }}>→</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: T().textMuted, marginBottom: 4 }}>To</div>
+              <select value={txTo} onChange={e => setTxTo(e.target.value)}
+                style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 6px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>
+                <option value="">Select...</option>
+                {accounts.filter(a => a.id !== txFrom).map(a => { const ti = ACCOUNT_TYPES.find(t => t.id === a.type); return <option key={a.id} value={a.id}>{ti?.icon} {a.name}</option>; })}
+              </select>
+            </div>
+          </div>
+          <input value={txAmount} onChange={e => setTxAmount(e.target.value)} placeholder="Amount" type="number"
+            style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 10, outline: "none", fontFamily: T().mono }} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => {
+              const amt = parseFloat(txAmount);
+              if (!txFrom || !txTo || !amt || amt <= 0 || txFrom === txTo) return;
+              onTransfer(txFrom, txTo, amt);
+              resetTransfer(); haptic();
+            }} disabled={!txFrom || !txTo || !parseFloat(txAmount)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: (!txFrom || !txTo || !parseFloat(txAmount)) ? T().textDim : T().accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: (!txFrom || !txTo || !parseFloat(txAmount)) ? "not-allowed" : "pointer", opacity: (!txFrom || !txTo || !parseFloat(txAmount)) ? 0.5 : 1 }}>Transfer</button>
+            <button onClick={resetTransfer} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {/* Add account form */}
       {adding ? (
-        <div style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "16px 18px", animation: "slideIn 0.2s ease" }}>
+        <div style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "16px 18px", animation: "slideIn 0.2s ease", marginTop: 8 }}>
           <div style={{ fontSize: 13, color: T().text, fontWeight: 600, marginBottom: 10 }}>🏦 New Account</div>
           <input value={formName} onChange={e => setFormName(e.target.value)} placeholder="Account name (e.g. Chase Checking)"
             style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 8, outline: "none" }} />
-
-          {/* Type selector */}
           <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
             {ACCOUNT_TYPES.map(at => (
               <button key={at.id} onClick={() => setFormType(at.id)}
@@ -1444,10 +1571,8 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount 
               </button>
             ))}
           </div>
-
           <input value={formBalance} onChange={e => setFormBalance(e.target.value)} placeholder="Current balance" type="number"
             style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 10, outline: "none" }} />
-
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => {
               const name = formName.trim() || (ACCOUNT_TYPES.find(t => t.id === formType)?.label || "Account");
@@ -1457,14 +1582,14 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount 
             <button onClick={resetForm} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
           </div>
         </div>
-      ) : (
+      ) : (!transferring && (accounts.length < 2 || filteredAccountId) && (
         <button onClick={() => setAdding(true)}
           style={{ width: "100%", padding: "10px 0", borderRadius: 10, border: `1px dashed ${T().accent}40`, background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }}
           onMouseEnter={e => { e.currentTarget.style.background = `${T().accent}10`; e.currentTarget.style.borderColor = `${T().accent}80`; }}
           onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = `${T().accent}40`; }}>
           + Add Account
         </button>
-      )}
+      ))}
     </div>
   );
 }
@@ -1479,6 +1604,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [showTxn, setShowTxn] = useState(true);
+  const [filteredAccountId, setFilteredAccountId] = useState(null);
   const fileRef = useRef(null);
 
   const allChildren = nodes.filter(n => n.parentId === node.id);
@@ -1495,6 +1621,42 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   const handleAddBankAccount = acct => addBankAccountToNode(node.id, acct);
   const handleUpdateBankAccount = (acctId, updates) => updateBankAccountInNode(node.id, acctId, updates);
   const handleRemoveBankAccount = acctId => removeBankAccountFromNode(node.id, acctId);
+
+  // Toggle paid with bank account balance adjustment
+  const handleTogglePaid = (entry) => {
+    const isPaid = entry.paid !== false;
+    const newPaid = !isPaid;
+    updateEntry(entry.id, { paid: newPaid });
+    // Adjust linked bank account balance
+    if (entry.bankAccountId) {
+      const acct = nodeBankAccounts.find(a => a.id === entry.bankAccountId);
+      if (acct) {
+        let delta = entry.amount || 0;
+        if (entry.type === "expense") delta = -delta; // subtract for expenses
+        // If marking unpaid, reverse the adjustment
+        if (!newPaid) delta = -delta;
+        updateBankAccountInNode(node.id, acct.id, { balance: (acct.balance || 0) + delta });
+      }
+    }
+  };
+
+  // Transfer between accounts
+  const handleTransfer = (fromId, toId, amount) => {
+    const fromAcct = nodeBankAccounts.find(a => a.id === fromId);
+    const toAcct = nodeBankAccounts.find(a => a.id === toId);
+    if (!fromAcct || !toAcct || amount <= 0) return;
+    // Adjust balances
+    updateBankAccountInNode(node.id, fromId, { balance: (fromAcct.balance || 0) - amount });
+    updateBankAccountInNode(node.id, toId, { balance: (toAcct.balance || 0) + amount });
+    // Create a transfer entry for history
+    addEntry({
+      id: uid(), nodeId: node.id,
+      label: `${fromAcct.name} → ${toAcct.name}`,
+      amount, type: "transfer", category: "other",
+      transferFromId: fromId, transferToId: toId,
+      date: todayStr(), dateISO: todayISO(), paid: true,
+    });
+  };
 
   // Copy budget: duplicate entire sub-tree — nodes, envelopes, and all entries (paid reset to false)
   const handleCopyBudget = (name) => {
@@ -1553,7 +1715,8 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
 
   let cumulative = 0; const rb = {};
   directEntries.forEach(e => { cumulative += e.type === "income" ? e.amount : -e.amount; rb[e.id] = cumulative; });
-  const filtered = search ? directEntries.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : directEntries;
+  const accountFiltered = filteredAccountId ? directEntries.filter(e => e.bankAccountId === filteredAccountId || e.transferFromId === filteredAccountId || e.transferToId === filteredAccountId) : directEntries;
+  const filtered = search ? accountFiltered.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : accountFiltered;
 
   const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: "", dateISO: "", paid: false }); setEditingId(eid); setSearch(""); setTab("overview"); haptic(); };
   const handleImport = (e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { parseCSV(ev.target.result).forEach(p => addEntry({ id: uid(), nodeId: node.id, ...p, dateISO: todayISO(), paid: false })); }; reader.readAsText(file); e.target.value = ""; };
@@ -1594,7 +1757,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
             {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
             {displayPrefs.budgetVsActual && <BudgetVsActual entries={entries} envelopes={envelopes} nodes={nodes} nodeId={node.id} />}
 
-            <BankAccountsPanel accounts={nodeBankAccounts} addAccount={handleAddBankAccount} updateAccount={handleUpdateBankAccount} removeAccount={handleRemoveBankAccount} />
+            <BankAccountsPanel accounts={nodeBankAccounts} addAccount={handleAddBankAccount} updateAccount={handleUpdateBankAccount} removeAccount={handleRemoveBankAccount} entries={directEntries} onFilterByAccount={setFilteredAccountId} filteredAccountId={filteredAccountId} onTransfer={handleTransfer} />
             <SavingsGoals goals={savingsGoals} addGoal={addSavingsGoal} updateGoal={updateSavingsGoal} removeGoal={removeSavingsGoal} />
 
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Sub-budgets ({children.length})</div>
@@ -1650,7 +1813,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
           </>
         ) : (
           <>
-            <BankAccountsPanel accounts={nodeBankAccounts} addAccount={handleAddBankAccount} updateAccount={handleUpdateBankAccount} removeAccount={handleRemoveBankAccount} />
+            <BankAccountsPanel accounts={nodeBankAccounts} addAccount={handleAddBankAccount} updateAccount={handleUpdateBankAccount} removeAccount={handleRemoveBankAccount} entries={directEntries} onFilterByAccount={setFilteredAccountId} filteredAccountId={filteredAccountId} onTransfer={handleTransfer} />
             {/* Budget Summary Card */}
             {(() => { const tInc = directEntries.filter(e => e.type === "income").reduce((s, e) => s + e.amount, 0); const tExp = directEntries.filter(e => e.type === "expense").reduce((s, e) => s + e.amount, 0); const bal = tInc - tExp; return (
               <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -1673,15 +1836,32 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
 
             {/* Collapsible Transactions header */}
             <button onClick={() => { setShowTxn(!showTxn); haptic(5); }} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "none", border: "none", cursor: "pointer", padding: "0 0 10px", marginBottom: 0 }}>
-              <span style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</span>
+              <span style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Transactions ({filtered.length}{(search || filteredAccountId) ? ` of ${directEntries.length}` : ""})</span>
               <span style={{ fontSize: 14, color: T().textMuted, transition: "transform 0.2s", transform: showTxn ? "rotate(0deg)" : "rotate(-90deg)" }}>▾</span>
             </button>
 
             {showTxn && (
               <>
                 {/* Mark All Paid — only shown when unpaid entries exist */}
-                {directEntries.some(e => e.paid === false) && (
-                  <button onClick={() => { if (confirm(`Mark all ${directEntries.filter(e => e.paid === false).length} unpaid transaction(s) as paid?`)) { markAllPaid(node.id); haptic(); } }}
+                {directEntries.some(e => e.paid === false && e.type !== "transfer") && (
+                  <button onClick={() => {
+                    const unpaid = directEntries.filter(e => e.paid === false && e.type !== "transfer");
+                    if (confirm(`Mark all ${unpaid.length} unpaid transaction(s) as paid?`)) {
+                      // Adjust linked bank account balances
+                      const balAdj = {};
+                      unpaid.forEach(e => {
+                        if (e.bankAccountId) {
+                          if (!balAdj[e.bankAccountId]) balAdj[e.bankAccountId] = 0;
+                          balAdj[e.bankAccountId] += e.type === "income" ? (e.amount || 0) : -(e.amount || 0);
+                        }
+                      });
+                      Object.entries(balAdj).forEach(([acctId, delta]) => {
+                        const acct = nodeBankAccounts.find(a => a.id === acctId);
+                        if (acct) updateBankAccountInNode(node.id, acctId, { balance: (acct.balance || 0) + delta });
+                      });
+                      markAllPaid(node.id); haptic();
+                    }
+                  }}
                     style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", padding: "8px 0", marginBottom: 10, borderRadius: 10, border: `1px dashed ${T().inc}50`, background: `${T().inc}10`, color: T().inc, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "background 0.2s, border-color 0.2s" }}
                     onMouseEnter={e => { e.currentTarget.style.background = `${T().inc}20`; e.currentTarget.style.borderColor = `${T().inc}80`; }}
                     onMouseLeave={e => { e.currentTarget.style.background = `${T().inc}10`; e.currentTarget.style.borderColor = `${T().inc}50`; }}>
@@ -1690,7 +1870,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
                 )}
                 {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add income or expenses below"} /> : (
                   <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
-                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
+                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false, bankAccountId: src.bankAccountId || null }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} bankAccounts={nodeBankAccounts} onTogglePaid={handleTogglePaid} />
                   )} />
                 )}
               </>
