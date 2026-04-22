@@ -246,6 +246,7 @@ function useApp(user, householdId) {
     removeEntry: useCallback(id => up(p => ({ ...p, entries: p.entries.filter(e => e.id !== id) })), []),
     addEntries: useCallback(arr => up(p => ({ ...p, entries: [...p.entries, ...arr] })), []),
     markAllPaid: useCallback(nodeId => up(p => ({ ...p, entries: p.entries.map(e => e.nodeId === nodeId ? { ...e, paid: true } : e) })), []),
+    markAllUnpaid: useCallback(nodeId => up(p => ({ ...p, entries: p.entries.map(e => e.nodeId === nodeId ? { ...e, paid: false } : e) })), []),
     reorderEntries: useCallback((nodeId, orderedIds) => up(p => {
       const others = p.entries.filter(e => e.nodeId !== nodeId);
       const reordered = orderedIds.map(id => p.entries.find(e => e.id === id)).filter(Boolean);
@@ -1597,7 +1598,7 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount,
 // NODE PAGE
 // ══════════════════════════════════════════════════
 
-function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, allBankAccounts, setBankAccountsForNode, addBankAccountToNode, updateBankAccountInNode, removeBankAccountFromNode, addEntries, markAllPaid }) {
+function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, allBankAccounts, setBankAccountsForNode, addBankAccountToNode, updateBankAccountInNode, removeBankAccountFromNode, addEntries, markAllPaid, markAllUnpaid }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1868,6 +1869,30 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
                     ✓ Mark All as Paid
                   </button>
                 )}
+                {directEntries.some(e => e.paid !== false) && (
+                  <button onClick={() => {
+                    const paid = directEntries.filter(e => e.paid !== false);
+                    if (confirm(`Mark all ${paid.length} paid transaction(s) as unpaid?`)) {
+                      const balAdj = {};
+                      paid.forEach(e => {
+                        if (e.bankAccountId) {
+                          if (!balAdj[e.bankAccountId]) balAdj[e.bankAccountId] = 0;
+                          balAdj[e.bankAccountId] += e.type === "income" ? -(e.amount || 0) : (e.amount || 0);
+                        }
+                      });
+                      Object.entries(balAdj).forEach(([acctId, delta]) => {
+                        const acct = nodeBankAccounts.find(a => a.id === acctId);
+                        if (acct) updateBankAccountInNode(node.id, acctId, { balance: (acct.balance || 0) + delta });
+                      });
+                      markAllUnpaid(node.id); haptic();
+                    }
+                  }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", padding: "8px 0", marginBottom: 10, borderRadius: 10, border: `1px dashed ${T().textMuted}50`, background: `${T().textMuted}10`, color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "background 0.2s, border-color 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = `${T().textMuted}20`; e.currentTarget.style.borderColor = `${T().textMuted}80`; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = `${T().textMuted}10`; e.currentTarget.style.borderColor = `${T().textMuted}50`; }}>
+                    ↩ Mark All as Unpaid
+                  </button>
+                )}
                 {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add income or expenses below"} /> : (
                   <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
                     <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false, bankAccountId: src.bankAccountId || null }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} bankAccounts={nodeBankAccounts} onTogglePaid={handleTogglePaid} />
@@ -2099,6 +2124,6 @@ export default function App({ user, householdId }) {
       addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc}
       savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
       allBankAccounts={d.bankAccounts} setBankAccountsForNode={app.setBankAccountsForNode} addBankAccountToNode={app.addBankAccount} updateBankAccountInNode={app.updateBankAccount} removeBankAccountFromNode={app.removeBankAccountFromNode}
-      addEntries={app.addEntries} markAllPaid={app.markAllPaid} />
+      addEntries={app.addEntries} markAllPaid={app.markAllPaid} markAllUnpaid={app.markAllUnpaid} />
   );
 }
