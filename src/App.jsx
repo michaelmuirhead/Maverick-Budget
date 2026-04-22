@@ -198,11 +198,11 @@ function parseCSV(text) {
 }
 
 // ── State with Firebase Sync ──
-import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS, getDisplayPrefs, setDisplayPrefs, DEFAULT_DISPLAY_PREFS } from "./firebase";
+import { db, auth, signOut, doc, setDoc, onSnapshot, collection, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS, getDisplayPrefs, setDisplayPrefs, DEFAULT_DISPLAY_PREFS } from "./firebase";
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
 
-const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [], envelopes: {}, savingsGoals: [], bankAccount: {} };
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [], envelopes: {}, savingsGoals: [], bankAccount: {}, bankAccounts: {} };
 
 function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
@@ -219,7 +219,7 @@ function useApp(user, householdId) {
       if (skipNextRemote.current) { skipNextRemote.current = false; return; }
       if (snap.exists()) {
         const r = snap.data();
-        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], limits: r.limits||{}, customCategories: r.customCategories||[], envelopes: r.envelopes||{}, savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{} }));
+        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], limits: r.limits||{}, customCategories: r.customCategories||[], envelopes: r.envelopes||{}, savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{} }));
       }
       setSynced(true);
     }, () => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {} setSynced(true); });
@@ -269,9 +269,30 @@ function useApp(user, householdId) {
     removeSavingsGoal: useCallback(id => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).filter(g => g.id !== id) })), []),
     setBankAccount: useCallback((nodeId, data) => up(p => ({ ...p, bankAccount: { ...(p.bankAccount||{}), [nodeId]: data } })), []),
     removeBankAccount: useCallback(nodeId => up(p => { const ba = { ...(p.bankAccount||{}) }; delete ba[nodeId]; return { ...p, bankAccount: ba }; }), []),
+    // Per-node bank accounts (array of accounts per budget node)
+    setBankAccountsForNode: useCallback((nodeId, accounts) => up(p => ({ ...p, bankAccounts: { ...(p.bankAccounts||{}), [nodeId]: accounts } })), []),
+    addBankAccount: useCallback((nodeId, acct) => up(p => {
+      const cur = (p.bankAccounts||{})[nodeId] || [];
+      return { ...p, bankAccounts: { ...(p.bankAccounts||{}), [nodeId]: [...cur, { id: uid(), createdAt: new Date().toISOString(), ...acct }] } };
+    }), []),
+    updateBankAccount: useCallback((nodeId, acctId, updates) => up(p => {
+      const cur = (p.bankAccounts||{})[nodeId] || [];
+      return { ...p, bankAccounts: { ...(p.bankAccounts||{}), [nodeId]: cur.map(a => a.id === acctId ? { ...a, ...updates } : a) } };
+    }), []),
+    removeBankAccountFromNode: useCallback((nodeId, acctId) => up(p => {
+      const cur = (p.bankAccounts||{})[nodeId] || [];
+      return { ...p, bankAccounts: { ...(p.bankAccounts||{}), [nodeId]: cur.filter(a => a.id !== acctId) } };
+    }), []),
     getDesc,
   };
 }
+
+// ── Bank Account Types ──
+const ACCOUNT_TYPES = [
+  { id: "checking", label: "Checking", icon: "🏦", color: "#6366f1" },
+  { id: "savings", label: "Savings", icon: "🐖", color: "#22c55e" },
+  { id: "credit", label: "Credit Card", icon: "💳", color: "#ef4444" },
+];
 
 function getNodeBalance(nodes, entries, nid) {
   const d = entries.filter(e => e.nodeId === nid);
@@ -1310,113 +1331,148 @@ function SavingsGoals({ goals = [], addGoal, updateGoal, removeGoal }) {
 }
 
 // ══════════════════════════════════════════════════
-// NODE PAGE
-// ══════════════════════════════════════════════════
-function BankBanner({ nodeId, bankAccount, setBankAccount, removeBankAccount, entries }) {
-  const acct = (bankAccount || {})[nodeId];
-  const [adding, setAdding] = useState(false);
-  const [formName, setFormName] = useState("Checking Account");
-  const [formBalance, setFormBalance] = useState("0");
+// ── Single Bank Account Card ──
+function BankAccountCard({ acct, onUpdate, onRemove }) {
   const [editingName, setEditingName] = useState(false);
   const [editingBalance, setEditingBalance] = useState(false);
   const nameRef = useRef(null);
   const balRef = useRef(null);
-
   useEffect(() => { if (editingName && nameRef.current) nameRef.current.focus(); }, [editingName]);
   useEffect(() => { if (editingBalance && balRef.current) balRef.current.focus(); }, [editingBalance]);
 
-  if (!acct && !adding) {
-    return (
-      <div onClick={() => setAdding(true)} style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "18px 20px", textAlign: "center", cursor: "pointer", marginBottom: 16, transition: "background 0.2s" }}
-        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-        <span style={{ fontSize: 14, color: T().textMuted, fontWeight: 500 }}>{"\uD83C\uDFE6"} Add Bank Account</span>
-      </div>
-    );
-  }
-
-  if (!acct && adding) {
-    return (
-      <div style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "18px 20px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
-        <div style={{ fontSize: 13, color: T().text, fontWeight: 600, marginBottom: 12 }}>{"\uD83C\uDFE6"} New Bank Account</div>
-        <input value={formName} onChange={e => setFormName(e.target.value)} placeholder="Account name" style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 8, outline: "none" }} />
-        <input value={formBalance} onChange={e => setFormBalance(e.target.value)} placeholder="Starting balance" type="number" style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 12, outline: "none" }} />
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => { setBankAccount(nodeId, { name: formName.trim() || "Checking Account", startingBalance: parseFloat(formBalance) || 0 }); setAdding(false); haptic(); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save</button>
-          <button onClick={() => setAdding(false)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-        </div>
-      </div>
-    );
-  }
-
-  const paidIncome = entries.filter(e => e.type === "income" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
-  const paidExpenses = entries.filter(e => e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
-  const balance = (acct.startingBalance || 0) + paidIncome - paidExpenses;
-  const pendingCount = entries.filter(e => e.paid === false).length;
+  const typeInfo = ACCOUNT_TYPES.find(t => t.id === acct.type) || ACCOUNT_TYPES[0];
+  const bal = acct.balance || 0;
+  const isCredit = acct.type === "credit";
+  const displayBal = isCredit ? -Math.abs(bal) : bal;
   const inputStyle = { background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "4px 8px", outline: "none", fontSize: 14, fontFamily: T().mono };
 
-  const saveName = () => { const v = nameRef.current?.value?.trim(); if (v) setBankAccount(nodeId, { ...acct, name: v }); setEditingName(false); haptic(); };
-  const saveBalance = () => { const v = parseFloat(balRef.current?.value); if (!isNaN(v)) setBankAccount(nodeId, { ...acct, startingBalance: v }); setEditingBalance(false); haptic(); };
+  const saveName = () => { const v = nameRef.current?.value?.trim(); if (v) onUpdate(acct.id, { name: v }); setEditingName(false); haptic(); };
+  const saveBalance = () => { const v = parseFloat(balRef.current?.value); if (!isNaN(v)) onUpdate(acct.id, { balance: v }); setEditingBalance(false); haptic(); };
 
   return (
-    <div style={{ background: `linear-gradient(135deg, ${T().accent} 0%, ${T().accent}dd 30%, ${T().accentLight} 100%)`, borderRadius: 18, padding: 26, position: "relative", overflow: "hidden", boxShadow: `0 12px 40px ${T().accent}40`, marginBottom: 16 }}>
-      {/* Decorative circles */}
-      <div style={{ position: "absolute", top: "-40%", right: "-20%", width: 200, height: 200, borderRadius: "50%", background: "rgba(255,255,255,0.08)", pointerEvents: "none" }} />
-      <div style={{ position: "absolute", bottom: "-30%", left: "-10%", width: 160, height: 160, borderRadius: "50%", background: "rgba(255,255,255,0.05)", pointerEvents: "none" }} />
+    <div style={{ background: `linear-gradient(135deg, ${typeInfo.color} 0%, ${typeInfo.color}cc 50%, ${typeInfo.color}99 100%)`, borderRadius: 16, padding: "18px 20px", position: "relative", overflow: "hidden", boxShadow: `0 8px 28px ${typeInfo.color}30`, marginBottom: 10 }}>
+      <div style={{ position: "absolute", top: "-30%", right: "-15%", width: 140, height: 140, borderRadius: "50%", background: "rgba(255,255,255,0.07)", pointerEvents: "none" }} />
 
-      {/* Top row: name + icon + close */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, position: "relative", zIndex: 1 }}>
+      {/* Top row: name + type badge + close */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, position: "relative", zIndex: 1 }}>
         {editingName ? (
-          <input ref={nameRef} defaultValue={acct.name} onBlur={saveName} onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }} style={{ ...inputStyle, fontSize: 15, flex: 1, marginRight: 8 }} />
+          <input ref={nameRef} defaultValue={acct.name} onBlur={saveName} onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }} style={{ ...inputStyle, fontSize: 14, flex: 1, marginRight: 8 }} />
         ) : (
-          <div onClick={() => setEditingName(true)} style={{ fontSize: 15, color: "rgba(255,255,255,0.8)", fontWeight: 500, cursor: "text", flex: 1 }}>{acct.name}</div>
+          <div onClick={() => setEditingName(true)} style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: 500, cursor: "text", flex: 1 }}>{acct.name}</div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 24 }}>{"\uD83C\uDFE6"}</span>
-          <button onClick={() => { if (confirm("Remove this bank account?")) { removeBankAccount(nodeId); haptic(15); } }} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: 18, padding: "0 2px", lineHeight: 1 }}>{"\u00D7"}</button>
+          <span style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>{typeInfo.label}</span>
+          <span style={{ fontSize: 18 }}>{typeInfo.icon}</span>
+          <button onClick={() => { if (confirm(`Remove "${acct.name}"?`)) { onRemove(acct.id); haptic(15); } }} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 16, padding: "0 2px", lineHeight: 1 }}>×</button>
         </div>
       </div>
 
       {/* Balance — animated */}
-      <div style={{ position: "relative", zIndex: 1, marginBottom: 18 }}>
+      <div style={{ position: "relative", zIndex: 1 }}>
         {editingBalance ? (
-          <input ref={balRef} defaultValue={acct.startingBalance || 0} type="number" onBlur={saveBalance} onKeyDown={e => { if (e.key === "Enter") saveBalance(); if (e.key === "Escape") setEditingBalance(false); }} style={{ ...inputStyle, fontSize: 32, fontWeight: 700, width: "100%" }} />
+          <input ref={balRef} defaultValue={bal} type="number" onBlur={saveBalance} onKeyDown={e => { if (e.key === "Enter") saveBalance(); if (e.key === "Escape") setEditingBalance(false); }} style={{ ...inputStyle, fontSize: 28, fontWeight: 700, width: "100%" }} />
         ) : (
           <div onClick={() => setEditingBalance(true)} style={{ cursor: "text" }}>
-            <AnimatedCurrency value={balance}
-              dollarStyle={{ fontSize: 38, fontWeight: 700, color: "white", fontFamily: T().mono }}
-              centsStyle={{ fontSize: 22, fontWeight: 700, color: "rgba(255,255,255,0.7)", fontFamily: T().mono }} />
+            <AnimatedCurrency value={displayBal}
+              dollarStyle={{ fontSize: 30, fontWeight: 700, color: "white", fontFamily: T().mono }}
+              centsStyle={{ fontSize: 18, fontWeight: 700, color: "rgba(255,255,255,0.65)", fontFamily: T().mono }} />
           </div>
         )}
-      </div>
-
-      {/* Bottom row: Income / Expenses / Pending — animated */}
-      <div style={{ display: "flex", justifyContent: "space-between", position: "relative", zIndex: 1 }}>
-        <div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Income</div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>
-            <AnimatedCurrency value={paidIncome} prefix="+"
-              dollarStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }}
-              centsStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }} />
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Expenses</div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>
-            <AnimatedCurrency value={-paidExpenses}
-              dollarStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }}
-              centsStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }} />
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Pending</div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>{pendingCount} bill{pendingCount !== 1 ? "s" : ""}</div>
-        </div>
       </div>
     </div>
   );
 }
 
-function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, bankAccount, setBankAccount, removeBankAccount, addEntries, markAllPaid }) {
+// ── Bank Accounts Panel (multi-account) ──
+function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount }) {
+  const [adding, setAdding] = useState(false);
+  const [formName, setFormName] = useState("");
+  const [formType, setFormType] = useState("checking");
+  const [formBalance, setFormBalance] = useState("0");
+
+  const totalBalance = accounts.reduce((sum, a) => {
+    const bal = a.balance || 0;
+    return sum + (a.type === "credit" ? -Math.abs(bal) : bal);
+  }, 0);
+
+  const resetForm = () => { setFormName(""); setFormType("checking"); setFormBalance("0"); setAdding(false); };
+
+  if (accounts.length === 0 && !adding) {
+    return (
+      <div onClick={() => setAdding(true)} style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "18px 20px", textAlign: "center", cursor: "pointer", marginBottom: 16, transition: "background 0.2s" }}
+        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+        <span style={{ fontSize: 14, color: T().textMuted, fontWeight: 500 }}>🏦 Add Bank Account</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {/* Net Worth / Total bar */}
+      {accounts.length > 0 && (
+        <div style={{ background: T().surface, border: `1px solid ${T().cardBorder}`, borderRadius: 14, padding: "14px 18px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 2 }}>Net Total</div>
+            <div style={{ fontFamily: T().mono }}>
+              <AnimatedCurrency value={totalBalance}
+                dollarStyle={{ fontSize: 22, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono }}
+                centsStyle={{ fontSize: 14, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono, opacity: 0.7 }} />
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: T().textDim }}>{accounts.length} account{accounts.length !== 1 ? "s" : ""}</div>
+        </div>
+      )}
+
+      {/* Individual account cards */}
+      {accounts.map(acct => (
+        <BankAccountCard key={acct.id} acct={acct} onUpdate={updateAccount} onRemove={removeAccount} />
+      ))}
+
+      {/* Add account form */}
+      {adding ? (
+        <div style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "16px 18px", animation: "slideIn 0.2s ease" }}>
+          <div style={{ fontSize: 13, color: T().text, fontWeight: 600, marginBottom: 10 }}>🏦 New Account</div>
+          <input value={formName} onChange={e => setFormName(e.target.value)} placeholder="Account name (e.g. Chase Checking)"
+            style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 8, outline: "none" }} />
+
+          {/* Type selector */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {ACCOUNT_TYPES.map(at => (
+              <button key={at.id} onClick={() => setFormType(at.id)}
+                style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: formType === at.id ? `2px solid ${at.color}` : `1px solid ${T().inputBorder}`, background: formType === at.id ? `${at.color}20` : T().inputBg, color: formType === at.id ? at.color : T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" }}>
+                {at.icon} {at.label}
+              </button>
+            ))}
+          </div>
+
+          <input value={formBalance} onChange={e => setFormBalance(e.target.value)} placeholder="Current balance" type="number"
+            style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 10, outline: "none" }} />
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => {
+              const name = formName.trim() || (ACCOUNT_TYPES.find(t => t.id === formType)?.label || "Account");
+              addAccount({ name, type: formType, balance: parseFloat(formBalance) || 0 });
+              resetForm(); haptic();
+            }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save</button>
+            <button onClick={resetForm} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)}
+          style={{ width: "100%", padding: "10px 0", borderRadius: 10, border: `1px dashed ${T().accent}40`, background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }}
+          onMouseEnter={e => { e.currentTarget.style.background = `${T().accent}10`; e.currentTarget.style.borderColor = `${T().accent}80`; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = `${T().accent}40`; }}>
+          + Add Account
+        </button>
+      )}
+    </div>
+  );
+}
+
+// NODE PAGE
+// ══════════════════════════════════════════════════
+
+function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, allBankAccounts, setBankAccountsForNode, addBankAccountToNode, updateBankAccountInNode, removeBankAccountFromNode, addEntries, markAllPaid }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1434,25 +1490,58 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   const color = node.color || "#6366f1";
   const childStats = children.map(c => ({ ...c, ...getNodeBalance(nodes, entries, c.id), childCount: nodes.filter(n => n.parentId === c.id).length }));
 
-  // Copy budget: duplicate envelope structure AND all entries (with paid reset to false)
+  // Per-node bank accounts
+  const nodeBankAccounts = (allBankAccounts || {})[node.id] || [];
+  const handleAddBankAccount = acct => addBankAccountToNode(node.id, acct);
+  const handleUpdateBankAccount = (acctId, updates) => updateBankAccountInNode(node.id, acctId, updates);
+  const handleRemoveBankAccount = acctId => removeBankAccountFromNode(node.id, acctId);
+
+  // Copy budget: duplicate entire sub-tree — nodes, envelopes, and all entries (paid reset to false)
   const handleCopyBudget = (name) => {
     if (!copyingFrom || !name.trim()) { setCopyingFrom(null); return; }
-    const newId = uid();
     const srcNode = nodes.find(n => n.id === copyingFrom);
-    addNode({ id: newId, parentId: node.id, name: name.trim(), color: srcNode?.color || PALETTE[children.length % PALETTE.length] });
-    // Copy envelopes — caps only, strip rollover/rolled state
-    const srcEnvs = (envelopes || {})[copyingFrom] || {};
-    for (const [catId, env] of Object.entries(srcEnvs)) {
-      if (env && env.cap > 0) {
-        setEnvelope(newId, catId, { cap: env.cap });
+    const rootNewId = uid();
+    addNode({ id: rootNewId, parentId: node.id, name: name.trim(), color: srcNode?.color || PALETTE[children.length % PALETTE.length] });
+
+    // Build an oldId→newId map for the entire sub-tree
+    const idMap = { [copyingFrom]: rootNewId };
+    const descIds = getDesc(nodes, copyingFrom);
+    // Create cloned child nodes with new IDs, preserving parent hierarchy
+    for (const oldId of descIds) {
+      const newChildId = uid();
+      idMap[oldId] = newChildId;
+    }
+    for (const oldId of descIds) {
+      const srcChild = nodes.find(n => n.id === oldId);
+      if (srcChild) addNode({ ...srcChild, id: idMap[oldId], parentId: idMap[srcChild.parentId] || rootNewId });
+    }
+
+    // Copy envelopes for source node + all descendants
+    for (const oldId of [copyingFrom, ...descIds]) {
+      const srcEnvs = (envelopes || {})[oldId] || {};
+      for (const [catId, env] of Object.entries(srcEnvs)) {
+        if (env && env.cap > 0) {
+          setEnvelope(idMap[oldId], catId, { cap: env.cap });
+        }
       }
     }
-    // Copy all entries from source, assign new IDs, reset paid to false
-    const srcEntries = entries.filter(e => e.nodeId === copyingFrom);
+
+    // Copy all entries from source + all descendants, assign new IDs, remap nodeId, reset paid
+    const allSrcIds = [copyingFrom, ...descIds];
+    const srcEntries = entries.filter(e => allSrcIds.includes(e.nodeId));
     if (srcEntries.length > 0) {
-      const copiedEntries = srcEntries.map(e => ({ ...e, id: uid(), nodeId: newId, paid: false }));
+      const copiedEntries = srcEntries.map(e => ({ ...e, id: uid(), nodeId: idMap[e.nodeId], paid: false }));
       addEntries(copiedEntries);
     }
+
+    // Copy bank accounts for source + all descendants (balances carry over as-is)
+    for (const oldId of [copyingFrom, ...descIds]) {
+      const srcAccts = (allBankAccounts || {})[oldId];
+      if (srcAccts && srcAccts.length > 0) {
+        setBankAccountsForNode(idMap[oldId], srcAccts.map(a => ({ ...a, id: uid() })));
+      }
+    }
+
     setCopyingFrom(null);
     haptic();
   };
@@ -1505,7 +1594,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
             {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
             {displayPrefs.budgetVsActual && <BudgetVsActual entries={entries} envelopes={envelopes} nodes={nodes} nodeId={node.id} />}
 
-            <BankBanner nodeId={node.id} bankAccount={bankAccount} setBankAccount={setBankAccount} removeBankAccount={removeBankAccount} entries={allDescEntries} />
+            <BankAccountsPanel accounts={nodeBankAccounts} addAccount={handleAddBankAccount} updateAccount={handleUpdateBankAccount} removeAccount={handleRemoveBankAccount} />
             <SavingsGoals goals={savingsGoals} addGoal={addSavingsGoal} updateGoal={updateSavingsGoal} removeGoal={removeSavingsGoal} />
 
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Sub-budgets ({children.length})</div>
@@ -1530,7 +1619,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
               <div style={{ marginTop: 8, animation: "slideIn 0.2s ease" }}>
                 <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 6 }}>
                   Copying from: <strong style={{ color: T().text }}>{nodes.find(n => n.id === copyingFrom)?.name || "Budget"}</strong>
-                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(envelopes, recurring — no transactions)</span>
+                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(envelopes + all transactions, paid status reset)</span>
                 </div>
                 <InlineNew placeholder="New budget name (e.g. May 2026)" accentColor={color} icon={<div style={{ width: 8 }} />}
                   onCommit={name => handleCopyBudget(name)} onCancel={() => setCopyingFrom(null)} />
@@ -1544,12 +1633,24 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
               <button onClick={() => setShowArchived(false)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: "#475569", fontSize: 11, cursor: "pointer" }}>Hide archived</button>
             )}
             {addingChild && <div style={{ marginTop: 8 }}><InlineNew placeholder="Sub-budget name" accentColor={color} icon={<div style={{ width: 8 }} />}
-              onCommit={name => { addNode({ id: uid(), parentId: node.id, name, color: PALETTE[children.length % PALETTE.length] }); setAddingChild(false); haptic(); }} onCancel={() => setAddingChild(false)} /></div>}
+              onCommit={name => {
+                const newId = uid();
+                addNode({ id: newId, parentId: node.id, name, color: PALETTE[children.length % PALETTE.length] });
+                // Inherit bank accounts from the most recent sibling (if any)
+                const lastSibling = children.length > 0 ? children[children.length - 1] : null;
+                if (lastSibling) {
+                  const siblingAccts = (allBankAccounts || {})[lastSibling.id];
+                  if (siblingAccts && siblingAccts.length > 0) {
+                    setBankAccountsForNode(newId, siblingAccts.map(a => ({ ...a, id: uid() })));
+                  }
+                }
+                setAddingChild(false); haptic();
+              }} onCancel={() => setAddingChild(false)} /></div>}
             <BottomBar><Btn onClick={() => setAddingChild(true)} bg={`${color}25`} color={color}>+ New Sub-budget</Btn></BottomBar>
           </>
         ) : (
           <>
-            <BankBanner nodeId={node.id} bankAccount={bankAccount} setBankAccount={setBankAccount} removeBankAccount={removeBankAccount} entries={directEntries} />
+            <BankAccountsPanel accounts={nodeBankAccounts} addAccount={handleAddBankAccount} updateAccount={handleUpdateBankAccount} removeAccount={handleRemoveBankAccount} />
             {/* Budget Summary Card */}
             {(() => { const tInc = directEntries.filter(e => e.type === "income").reduce((s, e) => s + e.amount, 0); const tExp = directEntries.filter(e => e.type === "expense").reduce((s, e) => s + e.amount, 0); const bal = tInc - tExp; return (
               <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -1817,7 +1918,7 @@ export default function App({ user, householdId }) {
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
       addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc}
       savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
-      bankAccount={d.bankAccount} setBankAccount={app.setBankAccount} removeBankAccount={app.removeBankAccount}
+      allBankAccounts={d.bankAccounts} setBankAccountsForNode={app.setBankAccountsForNode} addBankAccountToNode={app.addBankAccount} updateBankAccountInNode={app.updateBankAccount} removeBankAccountFromNode={app.removeBankAccountFromNode}
       addEntries={app.addEntries} markAllPaid={app.markAllPaid} />
   );
 }
