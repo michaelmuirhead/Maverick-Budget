@@ -743,15 +743,16 @@ function CategoryManager({ customCategories = [], onAdd, onRemove }) {
 }
 
 // ── Entry Row ──
-function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle, allEntries, bankAccounts, onTogglePaid }) {
+function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle, allEntries, bankAccounts, onTogglePaid, selectMode, isSelected, onToggleSelect, onLongPress }) {
   const cat = allCats().find(c => c.id === entry.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const isInc = entry.type === "income"; const isPaid = entry.paid !== false;
   const isTransfer = entry.type === "transfer";
   const linkedAcct = entry.bankAccountId ? (bankAccounts || []).find(a => a.id === entry.bankAccountId) : null;
   const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
+  const longPressRef = useRef(null); const longPressTriggered = useRef(false);
   const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
-  const onTS = e => { ts.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; setSwiping(false); };
-  const onTM = e => { const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -210)); e.preventDefault(); } else if (Math.abs(dx) > Math.abs(dy) && dx > 0 && swipeX < 0) { setSwiping(true); setSwipeX(Math.min(swipeX + dx, 0)); e.preventDefault(); } };
-  const onTE = () => { if (swipeX < -80) { setSwipeX(-210); } else { setSwipeX(0); } setSwiping(false); };
+  const onTS = e => { ts.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; setSwiping(false); longPressTriggered.current = false; if (onLongPress) { longPressRef.current = setTimeout(() => { longPressTriggered.current = true; onLongPress(entry.id); haptic(20); }, 500); } };
+  const onTM = e => { clearTimeout(longPressRef.current); const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > 8 || Math.abs(dy) > 8) clearTimeout(longPressRef.current); if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -210)); e.preventDefault(); } else if (Math.abs(dx) > Math.abs(dy) && dx > 0 && swipeX < 0) { setSwiping(true); setSwipeX(Math.min(swipeX + dx, 0)); e.preventDefault(); } };
+  const onTE = () => { clearTimeout(longPressRef.current); if (longPressTriggered.current) { longPressTriggered.current = false; return; } if (swipeX < -80) { setSwipeX(-210); } else { setSwipeX(0); } setSwiping(false); };
   useEffect(() => { if (isEditing) setTimeout(() => { lRef.current?.focus(); rRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100); }, [isEditing]);
 
   const autoCategory = () => {
@@ -812,6 +813,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
 
   return (
     <div style={{ position: "relative", overflow: "hidden", borderRadius: 10 }}>
+      {!selectMode && (
       <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 210, display: "flex", borderRadius: "0 10px 10px 0" }}>
         <button onClick={() => { if (onTogglePaid) onTogglePaid(entry); else onUpdate(entry.id, { paid: !isPaid }); haptic(); setSwipeX(0); }}
           style={{ flex: 1, background: isPaid ? "#475569" : "#22c55e", border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
@@ -826,9 +828,14 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
           ✕<span style={{ fontSize: 9 }}>Delete</span>
         </button>
       </div>
-      <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onClick={() => { if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
-        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: T().row, borderRadius: 10, transition: swiping ? "none" : "transform 0.2s ease", transform: `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
-        <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDark, fontSize: 14, padding: "12px 10px", margin: "-10px -4px -10px -6px", touchAction: "none", userSelect: "none", flexShrink: 0 }}>⠿</div>
+      )}
+      <div onTouchStart={selectMode ? undefined : onTS} onTouchMove={selectMode ? undefined : onTM} onTouchEnd={selectMode ? undefined : onTE} onContextMenu={e => e.preventDefault()} onClick={() => { if (longPressTriggered.current) return; if (selectMode) { onToggleSelect(entry.id); return; } if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: selectMode && isSelected ? `${T().accent}12` : T().row, outline: selectMode && isSelected ? `1px solid ${T().accent}30` : "none", borderRadius: 10, transition: selectMode ? "background 0.15s, outline 0.15s" : (swiping ? "none" : "transform 0.2s ease"), transform: selectMode ? "none" : `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
+        {selectMode ? (
+          <div style={{ width: 22, height: 22, borderRadius: 6, border: isSelected ? `2px solid ${T().accent}` : "2px solid #475569", background: isSelected ? T().accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, color: "#fff", transition: "all 0.15s" }}>{isSelected ? "✓" : ""}</div>
+        ) : (
+          <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDark, fontSize: 14, padding: "12px 10px", margin: "-10px -4px -10px -6px", touchAction: "none", userSelect: "none", flexShrink: 0 }}>⠿</div>
+        )}
         <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: isPaid ? 0.5 : 0.85, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: isInc ? 15 : 14, fontWeight: 500, color: isPaid ? T().textMuted : "#f1f5f9", textDecoration: isPaid ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}</div>
@@ -1606,7 +1613,16 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   const [showArchived, setShowArchived] = useState(false);
   const [showTxn, setShowTxn] = useState(true);
   const [filteredAccountId, setFilteredAccountId] = useState(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkAction, setBulkAction] = useState(null);
+  const [bulkDate, setBulkDate] = useState("");
+  const [bulkAccountId, setBulkAccountId] = useState("");
   const fileRef = useRef(null);
+
+  const toggleSelect = (id) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s; });
+  const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setBulkAction(null); };
+  const selectedEntries = directEntries.filter(e => selectedIds.has(e.id));
 
   const allChildren = nodes.filter(n => n.parentId === node.id);
   const children = showArchived ? allChildren : allChildren.filter(c => !c.archived);
@@ -1719,7 +1735,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   const accountFiltered = filteredAccountId ? directEntries.filter(e => e.bankAccountId === filteredAccountId || e.transferFromId === filteredAccountId || e.transferToId === filteredAccountId) : directEntries;
   const filtered = search ? accountFiltered.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : accountFiltered;
 
-  const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: "", dateISO: "", paid: false }); setEditingId(eid); setSearch(""); setTab("overview"); haptic(); };
+  const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: "", dateISO: "", paid: false }); setEditingId(eid); setSearch(""); haptic(); };
   const handleImport = (e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { parseCSV(ev.target.result).forEach(p => addEntry({ id: uid(), nodeId: node.id, ...p, dateISO: todayISO(), paid: false })); }; reader.readAsText(file); e.target.value = ""; };
 
   return (
@@ -1758,7 +1774,6 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
             {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
             {displayPrefs.budgetVsActual && <BudgetVsActual entries={entries} envelopes={envelopes} nodes={nodes} nodeId={node.id} />}
 
-            <BankAccountsPanel accounts={nodeBankAccounts} addAccount={handleAddBankAccount} updateAccount={handleUpdateBankAccount} removeAccount={handleRemoveBankAccount} entries={directEntries} onFilterByAccount={setFilteredAccountId} filteredAccountId={filteredAccountId} onTransfer={handleTransfer} />
             <SavingsGoals goals={savingsGoals} addGoal={addSavingsGoal} updateGoal={updateSavingsGoal} removeGoal={removeSavingsGoal} />
 
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Sub-budgets ({children.length})</div>
@@ -1843,8 +1858,19 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
 
             {showTxn && (
               <>
+                {selectMode && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0 12px", borderBottom: `0.5px solid rgba(255,255,255,0.08)`, marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <button onClick={exitSelectMode} style={{ background: "none", border: "none", color: T().accentLight, fontSize: 13, cursor: "pointer", fontWeight: 500 }}>Cancel</button>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: T().text }}>{selectedIds.size} selected</span>
+                    </div>
+                    <button onClick={() => { if (selectedIds.size === filtered.length) setSelectedIds(new Set()); else setSelectedIds(new Set(filtered.map(e => e.id))); }} style={{ fontSize: 12, color: T().textMuted, background: "rgba(255,255,255,0.05)", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                      {selectedIds.size === filtered.length ? "Deselect all" : "Select all"}
+                    </button>
+                  </div>
+                )}
                 {/* Mark All Paid — only shown when unpaid entries exist */}
-                {directEntries.some(e => e.paid === false && e.type !== "transfer") && (
+                {!selectMode && directEntries.some(e => e.paid === false && e.type !== "transfer") && (
                   <button onClick={() => {
                     const unpaid = directEntries.filter(e => e.paid === false && e.type !== "transfer");
                     if (confirm(`Mark all ${unpaid.length} unpaid transaction(s) as paid?`)) {
@@ -1869,7 +1895,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
                     ✓ Mark All as Paid
                   </button>
                 )}
-                {directEntries.some(e => e.paid !== false) && (
+                {!selectMode && directEntries.some(e => e.paid !== false) && (
                   <button onClick={() => {
                     const paid = directEntries.filter(e => e.paid !== false);
                     if (confirm(`Mark all ${paid.length} paid transaction(s) as unpaid?`)) {
@@ -1895,8 +1921,73 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
                 )}
                 {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add income or expenses below"} /> : (
                   <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
-                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false, bankAccountId: src.bankAccountId || null }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} bankAccounts={nodeBankAccounts} onTogglePaid={handleTogglePaid} />
+                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false, bankAccountId: src.bankAccountId || null }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} bankAccounts={nodeBankAccounts} onTogglePaid={handleTogglePaid} selectMode={selectMode} isSelected={selectedIds.has(e.id)} onToggleSelect={toggleSelect} onLongPress={(id) => { setSelectMode(true); setSelectedIds(new Set([id])); }} />
                   )} />
+                )}
+                {selectMode && selectedIds.size > 0 && (
+                  <>
+                    {bulkAction === "date" && (
+                      <div style={{ padding: "12px 0", animation: "slideIn 0.2s ease" }}>
+                        <div style={{ fontSize: 12, color: T().text, fontWeight: 600, marginBottom: 8 }}>Set date for {selectedIds.size} transaction{selectedIds.size !== 1 ? "s" : ""}</div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <input type="date" value={bulkDate} onChange={e => setBulkDate(e.target.value)} style={{ flex: 1, background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 13, outline: "none", colorScheme: "dark" }} />
+                          <button onClick={() => { if (bulkDate) { selectedIds.forEach(id => updateEntry(id, { dateISO: bulkDate, date: fmtDate(bulkDate) })); haptic(); exitSelectMode(); } }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Apply</button>
+                          <button onClick={() => setBulkAction(null)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                    {bulkAction === "account" && (
+                      <div style={{ padding: "12px 0", animation: "slideIn 0.2s ease" }}>
+                        <div style={{ fontSize: 12, color: T().text, fontWeight: 600, marginBottom: 8 }}>Set account for {selectedIds.size} transaction{selectedIds.size !== 1 ? "s" : ""}</div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <select value={bulkAccountId} onChange={e => setBulkAccountId(e.target.value)} style={{ flex: 1, background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 13, outline: "none", colorScheme: "dark" }}>
+                            <option value="">None</option>
+                            {nodeBankAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                          </select>
+                          <button onClick={() => { selectedIds.forEach(id => updateEntry(id, { bankAccountId: bulkAccountId || null })); haptic(); exitSelectMode(); }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#06b6d4", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Apply</button>
+                          <button onClick={() => setBulkAction(null)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                    {!bulkAction && (
+                      <div style={{ display: "flex", gap: 8, padding: "12px 0", background: `linear-gradient(to top, ${T().bg.includes("#0a0a1a") ? "#0a0a1a" : "#021a1a"} 70%, transparent)`, position: "sticky", bottom: 0, zIndex: 5 }}>
+                        <button onClick={() => { setBulkAction("date"); setBulkDate(""); }} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: `${T().accent}20`, color: T().accentLight }}>
+                          <span style={{ fontSize: 16 }}>📅</span>Set date
+                        </button>
+                        <button onClick={() => { setBulkAction("account"); setBulkAccountId(""); }} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "rgba(6,182,212,0.15)", color: "#22d3ee" }}>
+                          <span style={{ fontSize: 16 }}>🏦</span>Account
+                        </button>
+                        <button onClick={() => {
+                          const allPaid = selectedEntries.every(e => e.paid !== false);
+                          const newPaid = allPaid ? false : true;
+                          selectedEntries.forEach(e => {
+                            if ((e.paid !== false) !== newPaid) {
+                              updateEntry(e.id, { paid: newPaid });
+                              if (e.bankAccountId) {
+                                const acct = nodeBankAccounts.find(a => a.id === e.bankAccountId);
+                                if (acct) {
+                                  let delta = e.amount || 0;
+                                  if (e.type === "expense") delta = -delta;
+                                  if (!newPaid) delta = -delta;
+                                  updateBankAccountInNode(node.id, acct.id, { balance: (acct.balance || 0) + delta });
+                                }
+                              }
+                            }
+                          });
+                          haptic(); exitSelectMode();
+                        }} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: `${T().inc}18`, color: T().inc }}>
+                          <span style={{ fontSize: 16 }}>✓</span>{selectedEntries.every(e => e.paid !== false) ? "Unpay" : "Pay"}
+                        </button>
+                        <button onClick={() => {
+                          if (confirm(`Delete ${selectedIds.size} transaction${selectedIds.size !== 1 ? "s" : ""}?`)) {
+                            selectedIds.forEach(id => removeEntry(id)); haptic(15); exitSelectMode();
+                          }
+                        }} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>
+                          <span style={{ fontSize: 16 }}>✕</span>Delete
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -1951,7 +2042,8 @@ export default function App({ user, householdId }) {
         input,select,textarea{font-size:16px !important;-webkit-text-size-adjust:100%}
         ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
         input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
-        .app-shell{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+        .app-shell{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+        .app-shell input,.app-shell textarea,.app-shell select{-webkit-user-select:text;user-select:text}
       `}</style>
       <div style={{ position: "absolute", top: -120, right: -80, width: 300, height: 300, background: t.glow, animation: "pulse 6s ease-in-out infinite", pointerEvents: "none" }} />
       <NotificationManager userId={user.uid} householdId={householdId} />
