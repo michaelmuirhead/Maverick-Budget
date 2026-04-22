@@ -244,6 +244,8 @@ function useApp(user, householdId) {
     addEntry: useCallback(e => up(p => ({ ...p, entries: [...p.entries, e] })), []),
     updateEntry: useCallback((id, u) => up(p => ({ ...p, entries: p.entries.map(e => e.id === id ? { ...e, ...u } : e) })), []),
     removeEntry: useCallback(id => up(p => ({ ...p, entries: p.entries.filter(e => e.id !== id) })), []),
+    addEntries: useCallback(arr => up(p => ({ ...p, entries: [...p.entries, ...arr] })), []),
+    markAllPaid: useCallback(nodeId => up(p => ({ ...p, entries: p.entries.map(e => e.nodeId === nodeId ? { ...e, paid: true } : e) })), []),
     reorderEntries: useCallback((nodeId, orderedIds) => up(p => {
       const others = p.entries.filter(e => e.nodeId !== nodeId);
       const reordered = orderedIds.map(id => p.entries.find(e => e.id === id)).filter(Boolean);
@@ -1414,7 +1416,7 @@ function BankBanner({ nodeId, bankAccount, setBankAccount, removeBankAccount, en
   );
 }
 
-function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, bankAccount, setBankAccount, removeBankAccount }) {
+function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, bankAccount, setBankAccount, removeBankAccount, addEntries, markAllPaid }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1432,7 +1434,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   const color = node.color || "#6366f1";
   const childStats = children.map(c => ({ ...c, ...getNodeBalance(nodes, entries, c.id), childCount: nodes.filter(n => n.parentId === c.id).length }));
 
-  // Copy budget: duplicate envelope structure (caps only, no entries/rollover state)
+  // Copy budget: duplicate envelope structure AND all entries (with paid reset to false)
   const handleCopyBudget = (name) => {
     if (!copyingFrom || !name.trim()) { setCopyingFrom(null); return; }
     const newId = uid();
@@ -1444,6 +1446,12 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
       if (env && env.cap > 0) {
         setEnvelope(newId, catId, { cap: env.cap });
       }
+    }
+    // Copy all entries from source, assign new IDs, reset paid to false
+    const srcEntries = entries.filter(e => e.nodeId === copyingFrom);
+    if (srcEntries.length > 0) {
+      const copiedEntries = srcEntries.map(e => ({ ...e, id: uid(), nodeId: newId, paid: false }));
+      addEntries(copiedEntries);
     }
     setCopyingFrom(null);
     haptic();
@@ -1570,6 +1578,15 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
 
             {showTxn && (
               <>
+                {/* Mark All Paid — only shown when unpaid entries exist */}
+                {directEntries.some(e => e.paid === false) && (
+                  <button onClick={() => { if (confirm(`Mark all ${directEntries.filter(e => e.paid === false).length} unpaid transaction(s) as paid?`)) { markAllPaid(node.id); haptic(); } }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", padding: "8px 0", marginBottom: 10, borderRadius: 10, border: `1px dashed ${T().inc}50`, background: `${T().inc}10`, color: T().inc, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "background 0.2s, border-color 0.2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = `${T().inc}20`; e.currentTarget.style.borderColor = `${T().inc}80`; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = `${T().inc}10`; e.currentTarget.style.borderColor = `${T().inc}50`; }}>
+                    ✓ Mark All as Paid
+                  </button>
+                )}
                 {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add income or expenses below"} /> : (
                   <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
                     <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
@@ -1800,6 +1817,7 @@ export default function App({ user, householdId }) {
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
       addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc}
       savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
-      bankAccount={d.bankAccount} setBankAccount={app.setBankAccount} removeBankAccount={app.removeBankAccount} />
+      bankAccount={d.bankAccount} setBankAccount={app.setBankAccount} removeBankAccount={app.removeBankAccount}
+      addEntries={app.addEntries} markAllPaid={app.markAllPaid} />
   );
 }
