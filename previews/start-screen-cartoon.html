@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MGT — Start Screen Cartoon Previews</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Fredoka:wght@600;700&family=Paytone+One&family=Jost:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #1a1a22; color: #ccc; font-family: 'Jost', system-ui, sans-serif; }
+  body { padding: 32px 24px 64px; }
+
+  .page-hdr { text-align: center; margin-bottom: 32px; }
+  .page-hdr h1 { font-family: 'Press Start 2P', monospace; font-size: 18px; color: #ffcf70; letter-spacing: 4px; }
+  .page-hdr p { margin-top: 8px; color: #888; font-size: 14px; }
+
+  .section { margin-bottom: 56px; max-width: 1400px; margin-left: auto; margin-right: auto; }
+  .section-hdr { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; padding: 0 8px; }
+  .section-hdr h2 { font-family: 'Press Start 2P', monospace; font-size: 14px; color: #ffcf70; letter-spacing: 2px; }
+  .section-hdr .tag { background: #2a2a35; color: #aaa; font-size: 11px; padding: 2px 8px; border-radius: 4px; letter-spacing: 1px; text-transform: uppercase; }
+  .section-hdr p { color: #888; font-size: 13px; line-height: 1.4; }
+
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .pair { grid-template-columns: 1fr; } }
+
+  .screen-wrap { position: relative; border-radius: 10px; overflow: hidden; }
+  .screen-label { position: absolute; top: 10px; left: 10px; z-index: 20; background: rgba(0,0,0,0.55); color: #fff; font-family: 'Jost', sans-serif; font-weight: 700; font-size: 11px; letter-spacing: 2px; padding: 4px 10px; border-radius: 4px; }
+
+  .screen { position: relative; aspect-ratio: 16/10; overflow: hidden; }
+
+  /* ========================================================= */
+  /*   STYLE 1 — CHUNKY PIXEL-ART CARTOON                       */
+  /* ========================================================= */
+  .pixel {
+    background:
+      radial-gradient(ellipse at 50% 100%, #f7c574 0%, #e9a54a 40%, transparent 70%),
+      linear-gradient(180deg, #6fc4e0 0%, #8fd4ec 50%, #b8e4f4 100%);
+    image-rendering: pixelated;
+    font-family: 'Press Start 2P', monospace;
+    color: #3c2513;
+  }
+  .pixel .clouds {
+    position: absolute; top: 18px; left: 0; right: 0; height: 40px; pointer-events: none; opacity: 0.85;
+  }
+  .pixel .cloud {
+    position: absolute; width: 56px; height: 18px;
+    background:
+      linear-gradient(#fff, #fff) 8px 0/40px 18px no-repeat,
+      linear-gradient(#fff, #fff) 0 4px/56px 10px no-repeat;
+    filter: drop-shadow(2px 2px 0 #d8e5ee);
+  }
+  .pixel .cloud:nth-child(1) { left: 8%; top: 0; }
+  .pixel .cloud:nth-child(2) { left: 62%; top: 12px; transform: scale(0.7); }
+  .pixel .cloud:nth-child(3) { left: 35%; top: 24px; transform: scale(0.5); }
+
+  .pixel .logo-wrap { position: absolute; top: 14%; left: 0; right: 0; text-align: center; z-index: 5; }
+  .pixel .logo {
+    display: inline-block;
+    font-size: 28px; letter-spacing: 4px; color: #fff8e1;
+    text-shadow:
+      3px 0 0 #8b3a1e, -3px 0 0 #8b3a1e, 0 3px 0 #8b3a1e, 0 -3px 0 #8b3a1e,
+      3px 3px 0 #8b3a1e, -3px 3px 0 #8b3a1e, 3px -3px 0 #8b3a1e, -3px -3px 0 #8b3a1e,
+      0 6px 0 #5a2512, 3px 6px 0 #5a2512, -3px 6px 0 #5a2512;
+    padding: 6px 12px;
+  }
+  .pixel .logo .tycoon { color: #ffd54a; }
+  .pixel .tagline {
+    position: absolute; top: 44%; left: 0; right: 0; text-align: center;
+    font-family: 'VT323', monospace; font-size: 20px; color: #4a2a0f; letter-spacing: 2px;
+    text-shadow: 1px 1px 0 #f5e6b3;
+  }
+
+  .pixel .stage {
+    position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+    width: 78%; max-width: 520px; height: 45%;
+    display: flex; justify-content: center; align-items: flex-end;
+    gap: 6%;
+  }
+  /* Pixel "sprites" built from gradients/blocks */
+  .pixel .crt {
+    width: 90px; height: 90px; position: relative; margin-bottom: 14px;
+    background:
+      linear-gradient(#3a87b7, #3a87b7) 14px 10px/54px 38px no-repeat,
+      linear-gradient(#d8d2b8, #d8d2b8) 0 0/90px 62px no-repeat,
+      linear-gradient(#8b7d5a, #8b7d5a) 0 62px/90px 6px no-repeat,
+      linear-gradient(#6a5f44, #6a5f44) 28px 68px/34px 16px no-repeat,
+      linear-gradient(#3c2513, #3c2513) 8px 84px/74px 6px no-repeat;
+    filter: drop-shadow(3px 3px 0 #3c2513);
+  }
+  .pixel .crt::after {
+    content: ""; position: absolute; left: 18px; top: 14px; width: 8px; height: 4px; background: #fff; opacity: 0.6;
+  }
+  .pixel .founder {
+    width: 70px; height: 96px; position: relative;
+    background:
+      /* hat */
+      linear-gradient(#c94a2a, #c94a2a) 14px 0/42px 12px no-repeat,
+      linear-gradient(#c94a2a, #c94a2a) 10px 10px/50px 6px no-repeat,
+      /* face */
+      linear-gradient(#f2c79c, #f2c79c) 16px 16px/38px 24px no-repeat,
+      /* eyes */
+      linear-gradient(#3c2513, #3c2513) 24px 24px/4px 4px no-repeat,
+      linear-gradient(#3c2513, #3c2513) 42px 24px/4px 4px no-repeat,
+      /* shirt */
+      linear-gradient(#3970a8, #3970a8) 10px 40px/50px 34px no-repeat,
+      /* arm (will be animated for wave in HI) */
+      linear-gradient(#f2c79c, #f2c79c) 52px 44px/12px 20px no-repeat,
+      /* legs */
+      linear-gradient(#5a3a1e, #5a3a1e) 16px 74px/16px 20px no-repeat,
+      linear-gradient(#5a3a1e, #5a3a1e) 38px 74px/16px 20px no-repeat;
+    filter: drop-shadow(3px 3px 0 #3c2513);
+  }
+  .pixel .desk {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 22px;
+    background:
+      linear-gradient(#8b6a3e, #6a4e2c) 0 0/100% 10px no-repeat,
+      linear-gradient(#5a3a1e, #5a3a1e) 0 10px/100% 12px no-repeat;
+  }
+
+  /* Floating cartoon props */
+  .pixel .prop {
+    position: absolute; width: 26px; height: 26px;
+  }
+  .pixel .prop.pizza {
+    background:
+      /* crust triangle illusion */
+      radial-gradient(circle at 10px 22px, transparent 12px, #c97a3e 13px, #c97a3e 14px, transparent 15px),
+      linear-gradient(135deg, transparent 48%, #f4c36a 48%, #f4c36a 52%, transparent 52%),
+      linear-gradient(225deg, transparent 48%, #f4c36a 48%, #f4c36a 52%, transparent 52%);
+    clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    background-color: #f4c36a;
+    filter: drop-shadow(2px 2px 0 #8b3a1e);
+  }
+  .pixel .prop.coffee {
+    background:
+      linear-gradient(#fff, #fff) 0 0/26px 8px no-repeat,
+      linear-gradient(#8b4a2a, #8b4a2a) 2px 8px/22px 14px no-repeat,
+      linear-gradient(#fff, #fff) 18px 12px/8px 6px no-repeat;
+    filter: drop-shadow(2px 2px 0 #3c2513);
+  }
+  .pixel .prop.floppy {
+    background:
+      linear-gradient(#2a5788, #2a5788) 0 0/26px 26px no-repeat,
+      linear-gradient(#ccc, #ccc) 4px 4px/18px 10px no-repeat,
+      linear-gradient(#2a5788, #2a5788) 10px 6px/6px 6px no-repeat,
+      linear-gradient(#ccc, #ccc) 6px 18px/14px 6px no-repeat;
+    filter: drop-shadow(2px 2px 0 #0a1a2a);
+  }
+  .pixel .prop.heart {
+    background:
+      radial-gradient(circle at 8px 10px, #e94a6a 7px, transparent 8px),
+      radial-gradient(circle at 18px 10px, #e94a6a 7px, transparent 8px),
+      linear-gradient(#e94a6a, #e94a6a) 4px 12px/18px 7px no-repeat;
+    clip-path: polygon(50% 100%, 0 45%, 0 25%, 25% 0, 50% 20%, 75% 0, 100% 25%, 100% 45%);
+    background-color: #e94a6a;
+    filter: drop-shadow(2px 2px 0 #8b1a3a);
+  }
+
+  .pixel .menu {
+    position: absolute; right: 6%; top: 42%; width: 34%;
+    background: #fff5dc;
+    border: 4px solid #3c2513;
+    box-shadow: 0 6px 0 #3c2513, inset 0 -4px 0 #e4d3a6;
+    padding: 12px;
+    z-index: 10;
+  }
+  .pixel .menu-btn {
+    display: block; width: 100%;
+    padding: 10px 8px; margin-bottom: 8px;
+    background: #ffd54a;
+    border: 3px solid #3c2513;
+    box-shadow: 0 3px 0 #3c2513;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px; letter-spacing: 1px; color: #3c2513; text-align: left;
+    cursor: pointer;
+  }
+  .pixel .menu-btn.primary { background: #f07a3a; color: #fff8e1; text-shadow: 1px 1px 0 #8b3a1e; }
+  .pixel .menu-btn .sub { display: block; font-family: 'VT323', monospace; font-size: 13px; margin-top: 4px; letter-spacing: 1px; color: #5a3a1e; }
+  .pixel .menu-btn.primary .sub { color: #ffe6b8; }
+  .pixel .menu-btn:last-child { margin-bottom: 0; }
+  .pixel .version { position: absolute; bottom: 6px; left: 10px; font-family: 'VT323', monospace; font-size: 14px; color: #5a3a1e; letter-spacing: 1px; }
+
+  /* Pixel HIGH motion */
+  .pixel.hi .logo-wrap { animation: pixBounce 1.6s ease-in-out infinite; }
+  .pixel.hi .cloud:nth-child(1) { animation: drift 24s linear infinite; }
+  .pixel.hi .cloud:nth-child(2) { animation: drift 32s linear infinite; animation-delay: -8s; }
+  .pixel.hi .cloud:nth-child(3) { animation: drift 40s linear infinite; animation-delay: -16s; }
+  .pixel.hi .founder::before {
+    content: ""; position: absolute; right: -14px; top: 30px; width: 22px; height: 8px; background: #f2c79c;
+    transform-origin: left center;
+    animation: wave 1s ease-in-out infinite;
+    filter: drop-shadow(2px 2px 0 #3c2513);
+  }
+  .pixel.hi .menu-btn.primary { animation: pulse 1.2s ease-in-out infinite; }
+  .pixel.hi .prop.pizza { animation: floatA 3s ease-in-out infinite; }
+  .pixel.hi .prop.coffee { animation: floatB 3.5s ease-in-out infinite; animation-delay: -0.8s; }
+  .pixel.hi .prop.floppy { animation: floatA 4s ease-in-out infinite; animation-delay: -1.5s; }
+  .pixel.hi .prop.heart { animation: floatB 2.8s ease-in-out infinite; }
+
+  /* Pixel MEDIUM motion */
+  .pixel.md .logo-wrap { animation: bob 3s ease-in-out infinite; }
+  .pixel.md .menu-btn.primary { animation: pulse 2.4s ease-in-out infinite; }
+  .pixel.md .prop.floppy { animation: floatA 6s ease-in-out infinite; }
+
+  @keyframes pixBounce {
+    0%, 100% { transform: translateY(0) rotate(-1deg); }
+    50% { transform: translateY(-6px) rotate(1deg); }
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  @keyframes drift {
+    from { transform: translateX(0); }
+    to { transform: translateX(120%); }
+  }
+  @keyframes wave {
+    0%, 100% { transform: rotate(-10deg); }
+    50% { transform: rotate(40deg); }
+  }
+  @keyframes pulse {
+    0%, 100% { transform: translateY(0); box-shadow: 0 3px 0 #3c2513; }
+    50% { transform: translateY(-2px); box-shadow: 0 5px 0 #3c2513; }
+  }
+  @keyframes floatA {
+    0%, 100% { transform: translateY(0) rotate(-8deg); }
+    50% { transform: translateY(-12px) rotate(8deg); }
+  }
+  @keyframes floatB {
+    0%, 100% { transform: translateY(0) rotate(6deg); }
+    50% { transform: translateY(-10px) rotate(-6deg); }
+  }
+
+  /* ========================================================= */
+  /*   STYLE 2 — SATURDAY-MORNING VECTOR CARTOON               */
+  /* ========================================================= */
+  .sat {
+    background:
+      radial-gradient(circle at 30% 40%, #ffecb8 0%, #ffd77a 35%, #ffb547 100%);
+    font-family: 'Fredoka', 'Jost', sans-serif;
+    color: #1a1a22;
+    overflow: hidden;
+  }
+  .sat .rays {
+    position: absolute; left: 50%; top: 30%; width: 700px; height: 700px; transform: translate(-50%, -50%);
+    background: repeating-conic-gradient(
+      from 0deg,
+      rgba(255, 220, 120, 0.4) 0deg 18deg,
+      transparent 18deg 36deg
+    );
+    border-radius: 50%;
+    opacity: 0.65;
+  }
+  .sat .blob {
+    position: absolute; border-radius: 50%; filter: blur(0);
+  }
+  .sat .blob.teal { background: #2ec4a6; width: 140px; height: 140px; left: -40px; bottom: -40px; border: 5px solid #1a1a22; }
+  .sat .blob.pink { background: #ff6fa1; width: 110px; height: 110px; right: 12%; top: -30px; border: 5px solid #1a1a22; }
+  .sat .blob.purple { background: #a274e8; width: 80px; height: 80px; right: -20px; bottom: 30%; border: 5px solid #1a1a22; }
+
+  .sat .logo-wrap {
+    position: absolute; top: 12%; left: 0; right: 0; text-align: center; z-index: 5;
+  }
+  .sat .logo {
+    display: inline-block;
+    font-family: 'Paytone One', 'Fredoka', sans-serif;
+    font-size: 58px; letter-spacing: 1px; line-height: 0.9;
+    color: #fff; -webkit-text-stroke: 4px #1a1a22;
+    text-shadow:
+      4px 4px 0 #1a1a22,
+      6px 6px 0 #ff6fa1,
+      8px 8px 0 #1a1a22;
+    padding: 4px 20px;
+  }
+  .sat .logo .two { color: #ffd93e; display: block; margin-top: -8px; }
+  .sat .tagline {
+    position: absolute; top: 38%; left: 0; right: 0; text-align: center;
+    font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 15px; color: #1a1a22;
+    letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  .sat .tagline span { background: #fff; padding: 4px 12px; border-radius: 999px; border: 3px solid #1a1a22; box-shadow: 3px 3px 0 #1a1a22; }
+
+  .sat .star {
+    position: absolute; font-size: 32px; color: #fff; -webkit-text-stroke: 3px #1a1a22;
+    filter: drop-shadow(3px 3px 0 #1a1a22);
+  }
+  .sat .star.a { top: 22%; left: 12%; color: #ff6fa1; }
+  .sat .star.b { top: 18%; right: 16%; color: #2ec4a6; font-size: 24px; }
+  .sat .star.c { bottom: 32%; left: 8%; color: #ffd93e; font-size: 28px; }
+  .sat .star.d { bottom: 18%; right: 22%; color: #a274e8; font-size: 20px; }
+
+  /* Cartoon cartridge SVG-ish via shapes */
+  .sat .cart {
+    position: absolute; width: 78px; height: 92px;
+    background:
+      linear-gradient(180deg, #ff6fa1 0%, #ff6fa1 60%, #1a1a22 60%, #1a1a22 65%, #2a2a35 65% 90%, #1a1a22 90%) no-repeat;
+    border: 4px solid #1a1a22;
+    border-radius: 8px;
+    box-shadow: 4px 4px 0 #1a1a22;
+  }
+  .sat .cart::after {
+    content: "MGT"; position: absolute; top: 10px; left: 0; right: 0; text-align: center;
+    font-family: 'Paytone One', sans-serif; font-size: 16px; color: #fff;
+    -webkit-text-stroke: 2px #1a1a22;
+  }
+  .sat .cart.c1 { left: 8%; bottom: 18%; transform: rotate(-12deg); background:
+      linear-gradient(180deg, #2ec4a6 0%, #2ec4a6 60%, #1a1a22 60%, #1a1a22 65%, #fff5dc 65% 90%, #1a1a22 90%); }
+  .sat .cart.c1::after { content: "RPG"; }
+  .sat .cart.c2 { right: 6%; bottom: 30%; transform: rotate(14deg); }
+  .sat .cart.c2::after { content: "FPS"; }
+
+  .sat .menu {
+    position: absolute; left: 50%; bottom: 14%; transform: translateX(-50%);
+    width: 62%; max-width: 380px;
+    z-index: 8;
+  }
+  .sat .menu-btn {
+    display: block; width: 100%;
+    padding: 12px 16px; margin-bottom: 10px;
+    background: #fff;
+    border: 4px solid #1a1a22;
+    border-radius: 14px;
+    box-shadow: 5px 5px 0 #1a1a22;
+    font-family: 'Fredoka', sans-serif; font-weight: 700;
+    font-size: 18px; color: #1a1a22; text-align: left;
+    cursor: pointer;
+  }
+  .sat .menu-btn.primary { background: #ffd93e; }
+  .sat .menu-btn .sub { display: block; font-weight: 500; font-size: 12px; color: #555; margin-top: 2px; letter-spacing: 0.2px; }
+  .sat .version { position: absolute; bottom: 8px; left: 14px; font-family: 'Fredoka', sans-serif; font-weight: 500; font-size: 12px; color: #5a3a1e; }
+
+  /* Saturday HIGH motion */
+  .sat.hi .logo-wrap { animation: satTilt 2.2s ease-in-out infinite; }
+  .sat.hi .rays { animation: spin 30s linear infinite; }
+  .sat.hi .cart.c1 { animation: wobble1 3s ease-in-out infinite; }
+  .sat.hi .cart.c2 { animation: wobble2 2.6s ease-in-out infinite; }
+  .sat.hi .menu-btn.primary { animation: jiggle 1.4s ease-in-out infinite; }
+  .sat.hi .star.a { animation: twinkle 1.8s ease-in-out infinite; }
+  .sat.hi .star.b { animation: twinkle 2.2s ease-in-out infinite; animation-delay: -0.6s; }
+  .sat.hi .star.c { animation: twinkle 1.6s ease-in-out infinite; animation-delay: -0.3s; }
+  .sat.hi .star.d { animation: twinkle 2.0s ease-in-out infinite; animation-delay: -0.9s; }
+
+  /* Saturday MEDIUM motion */
+  .sat.md .logo-wrap { animation: bob 3.2s ease-in-out infinite; }
+  .sat.md .rays { animation: spin 60s linear infinite; }
+  .sat.md .menu-btn.primary { animation: jiggle 2.8s ease-in-out infinite; }
+
+  @keyframes satTilt {
+    0%, 100% { transform: rotate(-2deg) translateY(0); }
+    50% { transform: rotate(2deg) translateY(-6px); }
+  }
+  @keyframes spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+  @keyframes wobble1 {
+    0%, 100% { transform: rotate(-12deg) translateY(0); }
+    50% { transform: rotate(-6deg) translateY(-8px); }
+  }
+  @keyframes wobble2 {
+    0%, 100% { transform: rotate(14deg) translateY(0); }
+    50% { transform: rotate(20deg) translateY(-10px); }
+  }
+  @keyframes jiggle {
+    0%, 100% { transform: scale(1) rotate(0); box-shadow: 5px 5px 0 #1a1a22; }
+    40% { transform: scale(1.04) rotate(-1deg); box-shadow: 6px 7px 0 #1a1a22; }
+    60% { transform: scale(1.04) rotate(1deg); box-shadow: 7px 6px 0 #1a1a22; }
+  }
+  @keyframes twinkle {
+    0%, 100% { transform: scale(1) rotate(0); opacity: 1; }
+    50% { transform: scale(1.3) rotate(20deg); opacity: 0.6; }
+  }
+
+  /* ========================================================= */
+  /*   STYLE 3 — RETRO ARCADE MARQUEE                           */
+  /* ========================================================= */
+  .arcade {
+    background:
+      radial-gradient(ellipse at center, #1a0a2a 0%, #0a0415 70%),
+      #000;
+    font-family: 'Press Start 2P', monospace;
+    color: #fff;
+  }
+  .arcade .grid {
+    position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,0.03) 2px 3px),
+      linear-gradient(180deg, transparent 40%, #2a0a4a 70%, #ff2e88 100%);
+    perspective: 400px;
+  }
+  .arcade .floor {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 50%;
+    background:
+      repeating-linear-gradient(90deg, transparent 0 58px, #ff2e88 58px 60px),
+      repeating-linear-gradient(180deg, transparent 0 40px, #ff2e88 40px 42px);
+    transform: perspective(280px) rotateX(58deg);
+    transform-origin: top center;
+    opacity: 0.55;
+  }
+  .arcade .scanlines {
+    position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.25) 0 2px, transparent 2px 4px);
+    mix-blend-mode: multiply;
+    z-index: 30;
+  }
+
+  .arcade .logo-wrap {
+    position: absolute; top: 16%; left: 0; right: 0; text-align: center; z-index: 5;
+  }
+  .arcade .logo {
+    display: inline-block; padding: 0 16px;
+    font-size: 32px; letter-spacing: 5px; line-height: 1.3;
+    color: #ff2e88;
+    text-shadow:
+      0 0 4px #ff2e88, 0 0 10px #ff2e88, 0 0 20px #ff2e88,
+      0 0 40px #ff2e88, 2px 2px 0 #fff;
+  }
+  .arcade .logo .tycoon {
+    display: block; color: #2ee0ff;
+    text-shadow:
+      0 0 4px #2ee0ff, 0 0 10px #2ee0ff, 0 0 20px #2ee0ff,
+      0 0 40px #2ee0ff, 2px 2px 0 #fff;
+    font-size: 30px; margin-top: 6px;
+  }
+  .arcade .tagline {
+    position: absolute; top: 46%; left: 0; right: 0; text-align: center;
+    font-size: 9px; color: #ffd93e; letter-spacing: 3px;
+    text-shadow: 0 0 6px #ffd93e, 0 0 14px #ff9030;
+  }
+
+  .arcade .cabinet {
+    position: absolute; left: 10%; top: 58%; width: 40px; height: 52px;
+    background:
+      linear-gradient(#2ee0ff, #2ee0ff) 8px 8px/24px 16px no-repeat,
+      linear-gradient(#ff2e88, #ff2e88) 0 0/40px 4px no-repeat,
+      linear-gradient(#ff2e88, #ff2e88) 0 48px/40px 4px no-repeat,
+      linear-gradient(#1a1a22, #1a1a22) 0 0/40px 52px no-repeat;
+    box-shadow: 0 0 12px rgba(255, 46, 136, 0.8);
+  }
+  .arcade .cabinet.c2 { left: auto; right: 12%; top: 62%; }
+  .arcade .cabinet::after {
+    content: ""; position: absolute; left: 14px; bottom: 8px; width: 12px; height: 4px;
+    background: #ffd93e; box-shadow: 0 0 6px #ffd93e;
+  }
+
+  .arcade .menu {
+    position: absolute; left: 50%; top: 58%; transform: translateX(-50%);
+    width: 60%; max-width: 380px;
+    text-align: center;
+  }
+  .arcade .menu-btn {
+    display: block; width: 100%;
+    padding: 14px 16px; margin-bottom: 10px;
+    background: transparent;
+    border: 2px solid #2ee0ff;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 11px; letter-spacing: 2px; color: #2ee0ff;
+    box-shadow: 0 0 10px rgba(46, 224, 255, 0.6), inset 0 0 10px rgba(46, 224, 255, 0.2);
+    cursor: pointer; text-align: center;
+  }
+  .arcade .menu-btn.primary {
+    color: #ffd93e; border-color: #ffd93e;
+    box-shadow: 0 0 14px rgba(255, 217, 62, 0.8), inset 0 0 10px rgba(255, 217, 62, 0.3);
+  }
+  .arcade .menu-btn .sub {
+    display: block; font-size: 7px; margin-top: 6px; color: #9a9ad5; letter-spacing: 2px;
+  }
+  .arcade .menu-btn.primary .sub { color: #ff9030; }
+  .arcade .insert {
+    position: absolute; left: 0; right: 0; bottom: 8%; text-align: center;
+    font-size: 8px; letter-spacing: 3px; color: #ff2e88;
+    text-shadow: 0 0 6px #ff2e88;
+    z-index: 20;
+  }
+  .arcade .version { position: absolute; bottom: 6px; left: 10px; font-family: 'VT323', monospace; font-size: 12px; color: #6a4a8a; letter-spacing: 2px; }
+
+  /* Arcade HIGH motion */
+  .arcade.hi .logo-wrap { animation: neonBuzz 0.08s steps(2) infinite; }
+  .arcade.hi .logo { animation: hueShift 6s linear infinite; }
+  .arcade.hi .floor { animation: floorScroll 3s linear infinite; }
+  .arcade.hi .insert { animation: blink 0.6s steps(2) infinite; }
+  .arcade.hi .menu-btn.primary { animation: neonPulse 1.2s ease-in-out infinite; }
+  .arcade.hi .cabinet { animation: bob 2.4s ease-in-out infinite; }
+  .arcade.hi .cabinet.c2 { animation: bob 2.4s ease-in-out infinite; animation-delay: -0.8s; }
+
+  /* Arcade MEDIUM motion */
+  .arcade.md .floor { animation: floorScroll 8s linear infinite; }
+  .arcade.md .insert { animation: blink 1.4s steps(2) infinite; }
+  .arcade.md .menu-btn.primary { animation: neonPulse 2.6s ease-in-out infinite; }
+
+  @keyframes neonBuzz {
+    0% { opacity: 1; }
+    50% { opacity: 0.92; }
+    100% { opacity: 1; }
+  }
+  @keyframes hueShift {
+    0%, 100% { filter: hue-rotate(0deg); }
+    50% { filter: hue-rotate(25deg); }
+  }
+  @keyframes floorScroll {
+    from { background-position: 0 0, 0 0; }
+    to { background-position: 0 0, 0 84px; }
+  }
+  @keyframes blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+  @keyframes neonPulse {
+    0%, 100% { box-shadow: 0 0 14px rgba(255, 217, 62, 0.8), inset 0 0 10px rgba(255, 217, 62, 0.3); }
+    50% { box-shadow: 0 0 26px rgba(255, 217, 62, 1), inset 0 0 18px rgba(255, 217, 62, 0.5); }
+  }
+</style>
+</head>
+<body>
+  <div class="page-hdr">
+    <h1>MAVERICK GAME TYCOON — START SCREEN</h1>
+    <p>Three cartoon directions × two motion levels. Hover each to inspect.</p>
+  </div>
+
+  <!-- ===== STYLE 1: CHUNKY PIXEL-ART CARTOON ===== -->
+  <div class="section">
+    <div class="section-hdr">
+      <h2>1. CHUNKY PIXEL-ART CARTOON</h2>
+      <span class="tag">Pixel Workshop family</span>
+      <p>Stays in the brass/parchment family with chunky outlines, a tiny pixel founder at a CRT, and floating props. Cohesive with the rest of the game UI.</p>
+    </div>
+    <div class="pair">
+      <div class="screen-wrap">
+        <div class="screen-label">HIGH MOTION</div>
+        <div class="screen pixel hi">
+          <div class="clouds"><div class="cloud"></div><div class="cloud"></div><div class="cloud"></div></div>
+          <div class="logo-wrap"><span class="logo">MAVERICK<br><span class="tycoon">GAME TYCOON</span></span></div>
+          <div class="tagline">1980 — 2045 · BUILD YOUR STUDIO</div>
+          <div class="prop pizza" style="left: 8%; top: 32%;"></div>
+          <div class="prop coffee" style="right: 10%; top: 28%;"></div>
+          <div class="prop floppy" style="left: 14%; top: 48%;"></div>
+          <div class="prop heart" style="right: 36%; top: 36%;"></div>
+          <div class="stage">
+            <div class="founder"></div>
+            <div class="crt"></div>
+            <div class="desk"></div>
+          </div>
+          <div class="menu">
+            <button class="menu-btn primary">CONTINUE<span class="sub">Maverick Softworks · Jun 14, 1997</span></button>
+            <button class="menu-btn">NEW GAME<span class="sub">Start a new studio</span></button>
+          </div>
+          <div class="version">v0.1.0 · for Michael M</div>
+        </div>
+      </div>
+      <div class="screen-wrap">
+        <div class="screen-label">MEDIUM MOTION</div>
+        <div class="screen pixel md">
+          <div class="clouds"><div class="cloud"></div><div class="cloud"></div><div class="cloud"></div></div>
+          <div class="logo-wrap"><span class="logo">MAVERICK<br><span class="tycoon">GAME TYCOON</span></span></div>
+          <div class="tagline">1980 — 2045 · BUILD YOUR STUDIO</div>
+          <div class="prop floppy" style="left: 14%; top: 48%;"></div>
+          <div class="stage">
+            <div class="founder"></div>
+            <div class="crt"></div>
+            <div class="desk"></div>
+          </div>
+          <div class="menu">
+            <button class="menu-btn primary">CONTINUE<span class="sub">Maverick Softworks · Jun 14, 1997</span></button>
+            <button class="menu-btn">NEW GAME<span class="sub">Start a new studio</span></button>
+          </div>
+          <div class="version">v0.1.0 · for Michael M</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== STYLE 2: SATURDAY-MORNING VECTOR CARTOON ===== -->
+  <div class="section">
+    <div class="section-hdr">
+      <h2>2. SATURDAY-MORNING VECTOR CARTOON</h2>
+      <span class="tag">Departure</span>
+      <p>Bold vector shapes, thick black strokes, flat bright colors. Cartooniest option — will clash with existing terminal panels until they're redone.</p>
+    </div>
+    <div class="pair">
+      <div class="screen-wrap">
+        <div class="screen-label">HIGH MOTION</div>
+        <div class="screen sat hi">
+          <div class="rays"></div>
+          <div class="blob teal"></div>
+          <div class="blob pink"></div>
+          <div class="blob purple"></div>
+          <div class="star a">★</div>
+          <div class="star b">✦</div>
+          <div class="star c">★</div>
+          <div class="star d">✦</div>
+          <div class="cart c1"></div>
+          <div class="cart c2"></div>
+          <div class="logo-wrap"><span class="logo">MAVERICK<span class="two">GAME TYCOON</span></span></div>
+          <div class="tagline"><span>Build your studio · Ship the classics</span></div>
+          <div class="menu">
+            <button class="menu-btn primary">▶ CONTINUE<span class="sub">Maverick Softworks · Jun 14, 1997</span></button>
+            <button class="menu-btn">+ NEW GAME<span class="sub">Start a new studio</span></button>
+          </div>
+          <div class="version">v0.1.0 · for Michael M</div>
+        </div>
+      </div>
+      <div class="screen-wrap">
+        <div class="screen-label">MEDIUM MOTION</div>
+        <div class="screen sat md">
+          <div class="rays"></div>
+          <div class="blob teal"></div>
+          <div class="blob pink"></div>
+          <div class="star c">★</div>
+          <div class="cart c1"></div>
+          <div class="logo-wrap"><span class="logo">MAVERICK<span class="two">GAME TYCOON</span></span></div>
+          <div class="tagline"><span>Build your studio · Ship the classics</span></div>
+          <div class="menu">
+            <button class="menu-btn primary">▶ CONTINUE<span class="sub">Maverick Softworks · Jun 14, 1997</span></button>
+            <button class="menu-btn">+ NEW GAME<span class="sub">Start a new studio</span></button>
+          </div>
+          <div class="version">v0.1.0 · for Michael M</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== STYLE 3: RETRO ARCADE MARQUEE ===== -->
+  <div class="section">
+    <div class="section-hdr">
+      <h2>3. RETRO ARCADE MARQUEE</h2>
+      <span class="tag">Neon</span>
+      <p>Arcade cabinet vibe — chunky neon logo, scrolling grid floor, blinking INSERT COIN CTA. Game-y without full cartoon overhaul.</p>
+    </div>
+    <div class="pair">
+      <div class="screen-wrap">
+        <div class="screen-label">HIGH MOTION</div>
+        <div class="screen arcade hi">
+          <div class="grid"></div>
+          <div class="floor"></div>
+          <div class="cabinet"></div>
+          <div class="cabinet c2"></div>
+          <div class="logo-wrap"><span class="logo">MAVERICK<span class="tycoon">GAME TYCOON</span></span></div>
+          <div class="tagline">1980 — 2045 · SHIP THE CLASSICS</div>
+          <div class="menu">
+            <button class="menu-btn primary">CONTINUE<span class="sub">MAVERICK SOFTWORKS</span></button>
+            <button class="menu-btn">NEW GAME<span class="sub">START NEW STUDIO</span></button>
+          </div>
+          <div class="insert">▶ PRESS START ◀</div>
+          <div class="scanlines"></div>
+          <div class="version">v0.1.0</div>
+        </div>
+      </div>
+      <div class="screen-wrap">
+        <div class="screen-label">MEDIUM MOTION</div>
+        <div class="screen arcade md">
+          <div class="grid"></div>
+          <div class="floor"></div>
+          <div class="cabinet"></div>
+          <div class="logo-wrap"><span class="logo">MAVERICK<span class="tycoon">GAME TYCOON</span></span></div>
+          <div class="tagline">1980 — 2045 · SHIP THE CLASSICS</div>
+          <div class="menu">
+            <button class="menu-btn primary">CONTINUE<span class="sub">MAVERICK SOFTWORKS</span></button>
+            <button class="menu-btn">NEW GAME<span class="sub">START NEW STUDIO</span></button>
+          </div>
+          <div class="insert">▶ PRESS START ◀</div>
+          <div class="scanlines"></div>
+          <div class="version">v0.1.0</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
