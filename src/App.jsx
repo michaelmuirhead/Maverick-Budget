@@ -358,29 +358,11 @@ function DraggableList({ items, renderItem, onReorder }) {
   );
 }
 
-// ── Scroll Container — only scrolls when content overflows ──
+// ── Scroll Container ──
 function ScrollContainer({ children }) {
-  const ref = useRef(null);
-  const [needsScroll, setNeedsScroll] = useState(false);
-
-  useEffect(() => {
-    const check = () => {
-      if (ref.current) {
-        setNeedsScroll(ref.current.scrollHeight > ref.current.clientHeight);
-      }
-    };
-    check();
-    const obs = new ResizeObserver(check);
-    if (ref.current) obs.observe(ref.current);
-    // Also recheck on any DOM changes
-    const mut = new MutationObserver(check);
-    if (ref.current) mut.observe(ref.current, { childList: true, subtree: true });
-    return () => { obs.disconnect(); mut.disconnect(); };
-  }, []);
-
   return (
-    <div ref={ref} style={{
-      height: "100vh", overflowY: needsScroll ? "auto" : "hidden",
+    <div style={{
+      height: "100vh", overflowY: "auto",
       WebkitOverflowScrolling: "touch", overscrollBehavior: "none",
     }}>
       {children}
@@ -713,7 +695,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 34, flexWrap: "wrap" }}>
         <span style={{ fontSize: 11, color: T().textMuted }}>Date:</span>
-        <input ref={dRef} type="date" defaultValue={entry.dateISO||todayISO()} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", colorScheme: "dark" }} />
+        <input ref={dRef} type="date" defaultValue={entry.dateISO||""} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", colorScheme: "dark" }} />
         {!isInc && (<><span style={{ fontSize: 11, color: T().textMuted, marginLeft: 4 }}>Category:</span><select defaultValue={entry.category} onChange={e => onUpdate(entry.id, { category: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>{allCats().filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}</select></>)}
       </div>
     </div>
@@ -741,7 +723,7 @@ function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEd
         <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: isPaid ? 0.5 : 0.85, flexShrink: 0 }}>{cat.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: isInc ? 15 : 14, fontWeight: 500, color: isPaid ? T().textMuted : "#f1f5f9", textDecoration: isPaid ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}</div>
-          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>{cat.label} · {entry.date}</div>
+          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>{cat.label}{entry.date ? ` · ${entry.date}` : ""}</div>
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
           <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: isInc ? 15 : 14, color: isInc ? T().inc : T().exp, opacity: isPaid ? 0.5 : 1, textDecoration: isPaid ? "line-through" : "none" }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
@@ -1416,7 +1398,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   directEntries.forEach(e => { cumulative += e.type === "income" ? e.amount : -e.amount; rb[e.id] = cumulative; });
   const filtered = search ? directEntries.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : directEntries;
 
-  const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: todayStr(), dateISO: todayISO(), paid: false }); setEditingId(eid); setSearch(""); setTab("overview"); haptic(); };
+  const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: "", dateISO: "", paid: false }); setEditingId(eid); setSearch(""); setTab("overview"); haptic(); };
   const handleImport = (e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { parseCSV(ev.target.result).forEach(p => addEntry({ id: uid(), nodeId: node.id, ...p, dateISO: todayISO(), paid: false })); }; reader.readAsText(file); e.target.value = ""; };
 
   return (
@@ -1530,7 +1512,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
               <>
                 {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add income or expenses below"} /> : (
                   <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
-                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: todayStr(), dateISO: todayISO(), recurring: false, paid: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
+                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} />
                   )} />
                 )}
               </>
