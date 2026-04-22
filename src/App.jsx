@@ -116,6 +116,62 @@ function T() { return THEMES[window.__THEME__ || "midnight"] || THEMES.midnight;
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function fmt(n) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n); }
+
+// ── Animated Number Hook ──
+function useAnimatedNumber(target, duration = 650) {
+  const [display, setDisplay] = useState(target);
+  const rafRef = useRef(null);
+  const startRef = useRef(null);
+  const fromRef = useRef(target);
+  const toRef = useRef(target);
+  const currentRef = useRef(target);
+
+  useEffect(() => {
+    if (toRef.current === target) return;
+    fromRef.current = currentRef.current;
+    toRef.current = target;
+    startRef.current = null;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+    const easeOut = t => 1 - Math.pow(1 - t, 3); // cubic ease-out
+
+    const step = (timestamp) => {
+      if (!startRef.current) startRef.current = timestamp;
+      const elapsed = timestamp - startRef.current;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = easeOut(progress);
+      const value = fromRef.current + (toRef.current - fromRef.current) * eased;
+      currentRef.current = value;
+      setDisplay(value);
+      if (progress < 1) {
+        rafRef.current = requestAnimationFrame(step);
+      } else {
+        currentRef.current = toRef.current;
+        setDisplay(toRef.current);
+      }
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [target, duration]);
+
+  return display;
+}
+
+// ── Animated Currency Display ──
+function AnimatedCurrency({ value, dollarStyle, centsStyle, prefix = "" }) {
+  const animated = useAnimatedNumber(value);
+  const absVal = Math.abs(animated);
+  const str = fmt(absVal);
+  const dotIdx = str.indexOf(".");
+  const dollarPart = (animated < 0 ? "-" : "") + prefix + str.slice(0, dotIdx);
+  const centsPart = str.slice(dotIdx);
+  return (
+    <>
+      <span style={dollarStyle}>{dollarPart}</span>
+      <span style={centsStyle}>{centsPart}</span>
+    </>
+  );
+}
 function todayStr() { return new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function fmtDate(iso) { if (!iso) return todayStr(); const d = new Date(iso + "T12:00:00"); return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
@@ -1294,11 +1350,6 @@ function BankBanner({ nodeId, bankAccount, setBankAccount, removeBankAccount, en
   const paidExpenses = entries.filter(e => e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
   const balance = (acct.startingBalance || 0) + paidIncome - paidExpenses;
   const pendingCount = entries.filter(e => e.paid === false).length;
-  const balStr = fmt(Math.abs(balance));
-  const dotIdx = balStr.indexOf(".");
-  const dollarPart = (balance < 0 ? "-" : "") + balStr.slice(0, dotIdx);
-  const centsPart = balStr.slice(dotIdx);
-
   const inputStyle = { background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "4px 8px", outline: "none", fontSize: 14, fontFamily: T().mono };
 
   const saveName = () => { const v = nameRef.current?.value?.trim(); if (v) setBankAccount(nodeId, { ...acct, name: v }); setEditingName(false); haptic(); };
@@ -1323,27 +1374,36 @@ function BankBanner({ nodeId, bankAccount, setBankAccount, removeBankAccount, en
         </div>
       </div>
 
-      {/* Balance */}
+      {/* Balance — animated */}
       <div style={{ position: "relative", zIndex: 1, marginBottom: 18 }}>
         {editingBalance ? (
           <input ref={balRef} defaultValue={acct.startingBalance || 0} type="number" onBlur={saveBalance} onKeyDown={e => { if (e.key === "Enter") saveBalance(); if (e.key === "Escape") setEditingBalance(false); }} style={{ ...inputStyle, fontSize: 32, fontWeight: 700, width: "100%" }} />
         ) : (
           <div onClick={() => setEditingBalance(true)} style={{ cursor: "text" }}>
-            <span style={{ fontSize: 38, fontWeight: 700, color: "white", fontFamily: T().mono }}>{dollarPart}</span>
-            <span style={{ fontSize: 22, fontWeight: 700, color: "rgba(255,255,255,0.7)", fontFamily: T().mono }}>{centsPart}</span>
+            <AnimatedCurrency value={balance}
+              dollarStyle={{ fontSize: 38, fontWeight: 700, color: "white", fontFamily: T().mono }}
+              centsStyle={{ fontSize: 22, fontWeight: 700, color: "rgba(255,255,255,0.7)", fontFamily: T().mono }} />
           </div>
         )}
       </div>
 
-      {/* Bottom row: Income / Expenses / Pending */}
+      {/* Bottom row: Income / Expenses / Pending — animated */}
       <div style={{ display: "flex", justifyContent: "space-between", position: "relative", zIndex: 1 }}>
         <div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Income</div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>+{fmt(paidIncome)}</div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>
+            <AnimatedCurrency value={paidIncome} prefix="+"
+              dollarStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }}
+              centsStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }} />
+          </div>
         </div>
         <div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Expenses</div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>{"\u2212"}{fmt(paidExpenses)}</div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>
+            <AnimatedCurrency value={-paidExpenses}
+              dollarStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }}
+              centsStyle={{ fontSize: 14, fontWeight: 700, color: "rgba(255,255,255,0.9)", fontFamily: T().mono }} />
+          </div>
         </div>
         <div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Pending</div>
