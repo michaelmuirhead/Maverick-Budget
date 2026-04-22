@@ -146,7 +146,7 @@ import { db, auth, signOut, doc, setDoc, onSnapshot, requestNotificationPermissi
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
 
-const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [], envelopes: {}, savingsGoals: [] };
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [], envelopes: {}, savingsGoals: [], bankAccount: {} };
 
 function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
@@ -163,7 +163,7 @@ function useApp(user, householdId) {
       if (skipNextRemote.current) { skipNextRemote.current = false; return; }
       if (snap.exists()) {
         const r = snap.data();
-        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], limits: r.limits||{}, customCategories: r.customCategories||[], envelopes: r.envelopes||{}, savingsGoals: r.savingsGoals||[] }));
+        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], limits: r.limits||{}, customCategories: r.customCategories||[], envelopes: r.envelopes||{}, savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{} }));
       }
       setSynced(true);
     }, () => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {} setSynced(true); });
@@ -209,6 +209,8 @@ function useApp(user, householdId) {
     addSavingsGoal: useCallback(g => up(p => ({ ...p, savingsGoals: [...(p.savingsGoals||[]), g] })), []),
     updateSavingsGoal: useCallback((id, u) => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).map(g => g.id === id ? { ...g, ...u } : g) })), []),
     removeSavingsGoal: useCallback(id => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).filter(g => g.id !== id) })), []),
+    setBankAccount: useCallback((nodeId, data) => up(p => ({ ...p, bankAccount: { ...(p.bankAccount||{}), [nodeId]: data } })), []),
+    removeBankAccount: useCallback(nodeId => up(p => { const ba = { ...(p.bankAccount||{}) }; delete ba[nodeId]; return { ...p, bankAccount: ba }; }), []),
     getDesc,
   };
 }
@@ -1270,7 +1272,107 @@ function SavingsGoals({ goals = [], addGoal, updateGoal, removeGoal }) {
 // ══════════════════════════════════════════════════
 // NODE PAGE
 // ══════════════════════════════════════════════════
-function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal }) {
+function BankBanner({ nodeId, bankAccount, setBankAccount, removeBankAccount, entries }) {
+  const acct = (bankAccount || {})[nodeId];
+  const [adding, setAdding] = useState(false);
+  const [formName, setFormName] = useState("Checking Account");
+  const [formBalance, setFormBalance] = useState("0");
+  const [editingName, setEditingName] = useState(false);
+  const [editingBalance, setEditingBalance] = useState(false);
+  const nameRef = useRef(null);
+  const balRef = useRef(null);
+
+  useEffect(() => { if (editingName && nameRef.current) nameRef.current.focus(); }, [editingName]);
+  useEffect(() => { if (editingBalance && balRef.current) balRef.current.focus(); }, [editingBalance]);
+
+  if (!acct && !adding) {
+    return (
+      <div onClick={() => setAdding(true)} style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "18px 20px", textAlign: "center", cursor: "pointer", marginBottom: 16, transition: "background 0.2s" }}
+        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+        <span style={{ fontSize: 14, color: T().textMuted, fontWeight: 500 }}>{"\uD83C\uDFE6"} Add Bank Account</span>
+      </div>
+    );
+  }
+
+  if (!acct && adding) {
+    return (
+      <div style={{ border: `2px dashed ${T().accent}40`, borderRadius: 14, padding: "18px 20px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
+        <div style={{ fontSize: 13, color: T().text, fontWeight: 600, marginBottom: 12 }}>{"\uD83C\uDFE6"} New Bank Account</div>
+        <input value={formName} onChange={e => setFormName(e.target.value)} placeholder="Account name" style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 8, outline: "none" }} />
+        <input value={formBalance} onChange={e => setFormBalance(e.target.value)} placeholder="Starting balance" type="number" style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 12, outline: "none" }} />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => { setBankAccount(nodeId, { name: formName.trim() || "Checking Account", startingBalance: parseFloat(formBalance) || 0 }); setAdding(false); haptic(); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save</button>
+          <button onClick={() => setAdding(false)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  const paidIncome = entries.filter(e => e.type === "income" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
+  const paidExpenses = entries.filter(e => e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
+  const balance = (acct.startingBalance || 0) + paidIncome - paidExpenses;
+  const pendingCount = entries.filter(e => e.paid === false).length;
+  const balStr = fmt(Math.abs(balance));
+  const dotIdx = balStr.indexOf(".");
+  const dollarPart = (balance < 0 ? "-" : "") + balStr.slice(0, dotIdx);
+  const centsPart = balStr.slice(dotIdx);
+
+  const inputStyle = { background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "4px 8px", outline: "none", fontSize: 14, fontFamily: T().mono };
+
+  const saveName = () => { const v = nameRef.current?.value?.trim(); if (v) setBankAccount(nodeId, { ...acct, name: v }); setEditingName(false); haptic(); };
+  const saveBalance = () => { const v = parseFloat(balRef.current?.value); if (!isNaN(v)) setBankAccount(nodeId, { ...acct, startingBalance: v }); setEditingBalance(false); haptic(); };
+
+  return (
+    <div style={{ background: `linear-gradient(135deg, ${T().accent} 0%, ${T().accent}dd 30%, ${T().accentLight} 100%)`, borderRadius: 18, padding: 26, position: "relative", overflow: "hidden", boxShadow: `0 12px 40px ${T().accent}40`, marginBottom: 16 }}>
+      {/* Decorative circles */}
+      <div style={{ position: "absolute", top: "-40%", right: "-20%", width: 200, height: 200, borderRadius: "50%", background: "rgba(255,255,255,0.08)", pointerEvents: "none" }} />
+      <div style={{ position: "absolute", bottom: "-30%", left: "-10%", width: 160, height: 160, borderRadius: "50%", background: "rgba(255,255,255,0.05)", pointerEvents: "none" }} />
+
+      {/* Top row: name + icon + close */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, position: "relative", zIndex: 1 }}>
+        {editingName ? (
+          <input ref={nameRef} defaultValue={acct.name} onBlur={saveName} onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }} style={{ ...inputStyle, fontSize: 15, flex: 1, marginRight: 8 }} />
+        ) : (
+          <div onClick={() => setEditingName(true)} style={{ fontSize: 15, color: "rgba(255,255,255,0.8)", fontWeight: 500, cursor: "text", flex: 1 }}>{acct.name}</div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 24 }}>{"\uD83C\uDFE6"}</span>
+          <button onClick={() => { if (confirm("Remove this bank account?")) { removeBankAccount(nodeId); haptic(15); } }} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: 18, padding: "0 2px", lineHeight: 1 }}>{"\u00D7"}</button>
+        </div>
+      </div>
+
+      {/* Balance */}
+      <div style={{ position: "relative", zIndex: 1, marginBottom: 18 }}>
+        {editingBalance ? (
+          <input ref={balRef} defaultValue={acct.startingBalance || 0} type="number" onBlur={saveBalance} onKeyDown={e => { if (e.key === "Enter") saveBalance(); if (e.key === "Escape") setEditingBalance(false); }} style={{ ...inputStyle, fontSize: 32, fontWeight: 700, width: "100%" }} />
+        ) : (
+          <div onClick={() => setEditingBalance(true)} style={{ cursor: "text" }}>
+            <span style={{ fontSize: 38, fontWeight: 700, color: "white", fontFamily: T().mono }}>{dollarPart}</span>
+            <span style={{ fontSize: 22, fontWeight: 700, color: "rgba(255,255,255,0.7)", fontFamily: T().mono }}>{centsPart}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom row: Income / Expenses / Pending */}
+      <div style={{ display: "flex", justifyContent: "space-between", position: "relative", zIndex: 1 }}>
+        <div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Income</div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>+{fmt(paidIncome)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Expenses</div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>{"\u2212"}{fmt(paidExpenses)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Pending</div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.9)", fontWeight: 700, fontFamily: T().mono }}>{pendingCount} bill{pendingCount !== 1 ? "s" : ""}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, bankAccount, setBankAccount, removeBankAccount }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1353,6 +1455,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
             {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
             {displayPrefs.budgetVsActual && <BudgetVsActual entries={entries} envelopes={envelopes} nodes={nodes} nodeId={node.id} />}
 
+            <BankBanner nodeId={node.id} bankAccount={bankAccount} setBankAccount={setBankAccount} removeBankAccount={removeBankAccount} entries={allDescEntries} />
             <SavingsGoals goals={savingsGoals} addGoal={addSavingsGoal} updateGoal={updateSavingsGoal} removeGoal={removeSavingsGoal} />
 
             <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Sub-budgets ({children.length})</div>
@@ -1396,6 +1499,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
           </>
         ) : (
           <>
+            <BankBanner nodeId={node.id} bankAccount={bankAccount} setBankAccount={setBankAccount} removeBankAccount={removeBankAccount} entries={directEntries} />
             {/* Budget Summary Card */}
             {(() => { const tInc = directEntries.filter(e => e.type === "income").reduce((s, e) => s + e.amount, 0); const tExp = directEntries.filter(e => e.type === "expense").reduce((s, e) => s + e.amount, 0); const bal = tInc - tExp; return (
               <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -1653,6 +1757,7 @@ export default function App({ user, householdId }) {
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
       addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc}
-      savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal} />
+      savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
+      bankAccount={d.bankAccount} setBankAccount={app.setBankAccount} removeBankAccount={app.removeBankAccount} />
   );
 }
