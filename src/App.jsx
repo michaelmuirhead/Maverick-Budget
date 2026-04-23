@@ -1462,37 +1462,7 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount,
 
   return (
     <div style={{ marginBottom: 16 }}>
-      {/* Net Worth / Total bar with type breakdown */}
-      {accounts.length > 0 && (
-        <div style={{ background: T().surface, border: `1px solid ${T().cardBorder}`, borderRadius: 14, padding: "14px 18px", marginBottom: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: typeGroups.length > 1 ? 8 : 0 }}>
-            <div>
-              <div style={{ fontSize: 10, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 2 }}>Net Total</div>
-              <div style={{ fontFamily: T().mono }}>
-                <AnimatedCurrency value={totalBalance}
-                  dollarStyle={{ fontSize: 22, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono }}
-                  centsStyle={{ fontSize: 14, fontWeight: 700, color: totalBalance >= 0 ? T().inc : T().exp, fontFamily: T().mono, opacity: 0.7 }} />
-              </div>
-            </div>
-            <div style={{ fontSize: 10, color: T().textDim }}>{accounts.length} account{accounts.length !== 1 ? "s" : ""}</div>
-          </div>
-          {/* Type breakdown sub-lines */}
-          {typeGroups.length > 1 && (
-            <div style={{ display: "flex", gap: 12, paddingTop: 8, borderTop: `1px solid ${T().cardBorder}` }}>
-              {typeGroups.map(g => {
-                const display = g.id === "credit" ? -Math.abs(g.total) : g.total;
-                return (
-                  <div key={g.id} style={{ flex: 1 }}>
-                    <div style={{ fontSize: 9, color: T().textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>{g.icon} {g.label}</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, fontFamily: T().mono, color: g.color }}>{fmt(display)}</div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
+      
       {/* Filtered view header */}
       {filteredAccountId && (() => {
         const fa = accounts.find(a => a.id === filteredAccountId);
