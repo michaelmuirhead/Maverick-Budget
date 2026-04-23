@@ -11,7 +11,7 @@ const DEFAULT_CATEGORIES = [
   { id: "savings", label: "Savings", icon: "🏦", color: "#06b6d4" },
   { id: "other", label: "Other", icon: "📋", color: "#f97316" },
 ];
-function getCats(custom = []) { return [...DEFAULT_CATEGORIES, ...custom.filter(c => c.id && !DEFAULT_CATEGORIES.find(d => d.id === c.id))]; }
+function getCats(custom = []) { return [...DEFAULT_CATEGORIES, ...chustom.filter(c => c.id && !DEFAULT_CATEGORIES.find(d => d.id === c.id))]; }
 // Keep a global ref so getCats can always access custom categories
 window.__CUSTOM_CATS__ = [];
 function allCats() { return getCats(window.__CUSTOM_CATS__ || []); }
@@ -1622,12 +1622,12 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
 
   const toggleSelect = (id) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s; });
   const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setBulkAction(null); };
-  const selectedEntries = directEntries.filter(e => selectedIds.has(e.id));
 
   const allChildren = nodes.filter(n => n.parentId === node.id);
   const children = showArchived ? allChildren : allChildren.filter(c => !c.archived);
   const archivedCount = allChildren.filter(c => c.archived).length;
   const directEntries = entries.filter(e => e.nodeId === node.id);
+  const selectedEntries = directEntries.filter(e => selectedIds.has(e.id));
   const isFolderMode = children.length > 0 || addingChild || allChildren.length > 0;
   const { inc, exp, balance } = getNodeBalance(nodes, entries, node.id);
   const color = node.color || "#6366f1";
