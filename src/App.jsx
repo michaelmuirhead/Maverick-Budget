@@ -11,7 +11,7 @@ const DEFAULT_CATEGORIES = [
   { id: "savings", label: "Savings", icon: "🏦", color: "#06b6d4" },
   { id: "other", label: "Other", icon: "📋", color: "#f97316" },
 ];
-function getCats(custom = []) { return [...DEFAULT_CATEGORIES, ...chustom.filter(c => c.id && !DEFAULT_CATEGORIES.find(d => d.id === c.id))]; }
+function getCats(custom = []) { return [...DEFAULT_CATEGORIES, ...custom.filter(c => c.id && !DEFAULT_CATEGORIES.find(d => d.id === c.id))]; }
 // Keep a global ref so getCats can always access custom categories
 window.__CUSTOM_CATS__ = [];
 function allCats() { return getCats(window.__CUSTOM_CATS__ || []); }
