@@ -242,7 +242,24 @@ function useApp(user, householdId) {
     removeNode: useCallback(id => up(p => { const all = [id, ...getDesc(p.nodes, id)]; return { ...p, nodes: p.nodes.filter(n => !all.includes(n.id)), entries: p.entries.filter(e => !all.includes(e.nodeId)) }; }), [getDesc]),
     reorderNodes: useCallback((pid, ids) => up(p => { const others = p.nodes.filter(n => n.parentId !== pid); const reordered = ids.map(id => p.nodes.find(n => n.id === id)).filter(Boolean); return { ...p, nodes: [...others, ...reordered] }; }), []),
     addEntry: useCallback(e => up(p => ({ ...p, entries: [...p.entries, e] })), []),
-    updateEntry: useCallback((id, u) => up(p => ({ ...p, entries: p.entries.map(e => e.id === id ? { ...e, ...u } : e) })), []),
+    updateEntry: useCallback((id, u) => up(p => {
+      const updated = p.entries.map(e => e.id === id ? { ...e, ...u } : e);
+      if (u.dateISO !== undefined) {
+        const target = updated.find(e => e.id === id);
+        if (target && target.nodeId) {
+          const nodeId = target.nodeId;
+          const others = updated.filter(e => e.nodeId !== nodeId);
+          const nodeEntries = updated.filter(e => e.nodeId === nodeId);
+          nodeEntries.sort((a, b) => {
+            const da = a.dateISO || ""; const db = b.dateISO || "";
+            if (da && db) return da.localeCompare(db);
+            if (da) return -1; if (db) return 1; return 0;
+          });
+          return { ...p, entries: [...others, ...nodeEntries] };
+        }
+      }
+      return { ...p, entries: updated };
+    }), []),
     removeEntry: useCallback(id => up(p => ({ ...p, entries: p.entries.filter(e => e.id !== id) })), []),
     addEntries: useCallback(arr => up(p => ({ ...p, entries: [...p.entries, ...arr] })), []),
     markAllPaid: useCallback(nodeId => up(p => ({ ...p, entries: p.entries.map(e => e.nodeId === nodeId ? { ...e, paid: true } : e) })), []),
@@ -2662,7 +2679,9 @@ ${context}`;
     const bottomNav = (
       <div style={{
         position: "sticky", bottom: 0, left: 0, right: 0,
-        background: t.card, borderTop: `1px solid ${t.cardBorder}`,
+        background: t.id === "midnight" ? "rgba(8, 8, 22, 0.95)" : "rgba(2, 22, 22, 0.95)",
+        borderTop: `1px solid ${t.cardBorder}`,
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
         display: "flex", justifyContent: "space-around", alignItems: "center",
         padding: "8px 0 calc(8px + env(safe-area-inset-bottom, 0px))",
         zIndex: 100,
