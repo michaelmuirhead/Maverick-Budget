@@ -1576,12 +1576,17 @@ export default function App({ user, householdId }) {
   const [activeTab, setActiveTab] = useState("home");
   const [showNetWorth, setShowNetWorth] = useState(false);
   const [showAdvisor, setShowAdvisor] = useState(false);
-  const [advisorMessages, setAdvisorMessages] = useState([]);
+  const [advisorMessages, setAdvisorMessages] = useState(() => { try { const s = localStorage.getItem("maverick-advisor-msgs"); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [advisorInput, setAdvisorInput] = useState("");
   const [advisorLoading, setAdvisorLoading] = useState(false);
   const [nwItems, setNwItems] = useState(() => { try { const s = localStorage.getItem("maverick-nw-items"); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [addingNwItem, setAddingNwItem] = useState(null); // "asset" | "liability" | null
   const [editingNwItem, setEditingNwItem] = useState(null);
+  const [advisorTab, setAdvisorTab] = useState("chat"); // "chat" | "debt" | "whatif" | "bills"
+  const [debtExtra, setDebtExtra] = useState("100"); // extra monthly payment for debt payoff
+  const [debtStrategy, setDebtStrategy] = useState("avalanche"); // "avalanche" | "snowball"
+  const [whatIfCuts, setWhatIfCuts] = useState({}); // { categoryId: percentReduction }
+  const [whatIfMonths, setWhatIfMonths] = useState("12");
   const [themeId, setThemeId] = useState(() => { try { return localStorage.getItem("maverick-theme") || "midnight"; } catch { return "midnight"; } });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => typeof Notification !== "undefined" && Notification.permission === "granted");
   const [notifPrefs, setNotifPrefs] = useState({ ...DEFAULT_NOTIFICATION_PREFS });
@@ -1601,8 +1606,9 @@ export default function App({ user, householdId }) {
   const goBack = () => setNavStack(navStack.slice(0, -1));
   const goHome = () => { setNavStack([]); setActiveTab("home"); setShowNetWorth(false); setShowAdvisor(false); };
 
-  // Persist net worth items
+  // Persist net worth items and advisor messages
   useEffect(() => { try { localStorage.setItem("maverick-nw-items", JSON.stringify(nwItems)); } catch {} }, [nwItems]);
+  useEffect(() => { try { localStorage.setItem("maverick-advisor-msgs", JSON.stringify(advisorMessages.slice(-50))); } catch {} }, [advisorMessages]);
   const addNwItem = (item) => setNwItems(prev => [...prev, { id: uid(), ...item, createdAt: new Date().toISOString() }]);
   const updateNwItem = (id, updates) => setNwItems(prev => prev.map(i => i.id === id ? { ...i, ...updates } : i));
   const removeNwItem = (id) => setNwItems(prev => prev.filter(i => i.id !== id));
@@ -1658,19 +1664,28 @@ export default function App({ user, householdId }) {
     const [name, setName] = useState(item?.name || "");
     const [value, setValue] = useState(item?.value?.toString() || "");
     const [category, setCategory] = useState(item?.category || (group === "asset" ? "checking" : "credit"));
+    const [rate, setRate] = useState(item?.rate?.toString() || "");
+    const [minPayment, setMinPayment] = useState(item?.minPayment?.toString() || "");
     const types = ACCOUNT_TYPES.filter(at => at.group === group);
+    const isLiab = group === "liability";
     return (
       <div style={{ padding: "12px 14px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, marginBottom: 8, animation: "slideIn 0.2s ease" }}>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder={group === "asset" ? "e.g. Savings Account" : "e.g. Student Loan"} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, marginBottom: 8, outline: "none" }} autoFocus />
+        <input value={name} onChange={e => setName(e.target.value)} placeholder={isLiab ? "e.g. Student Loan" : "e.g. Savings Account"} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, marginBottom: 8, outline: "none" }} autoFocus />
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <select value={category} onChange={e => setCategory(e.target.value)} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 13 }}>
             {types.map(at => <option key={at.id} value={at.id}>{at.icon} {at.label}</option>)}
           </select>
-          <input value={value} onChange={e => setValue(e.target.value)} placeholder="0.00" type="number" step="0.01" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, textAlign: "right" }} />
+          <input value={value} onChange={e => setValue(e.target.value)} placeholder="Balance" type="number" step="0.01" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, textAlign: "right" }} />
         </div>
+        {isLiab && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input value={rate} onChange={e => setRate(e.target.value)} placeholder="APR %" type="number" step="0.1" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 13, textAlign: "center" }} />
+            <input value={minPayment} onChange={e => setMinPayment(e.target.value)} placeholder="Min payment" type="number" step="1" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 13, textAlign: "center" }} />
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onCancel} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: "transparent", color: t.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => { if (!name.trim() && !parseFloat(value)) return; onSave({ name: name.trim() || "Untitled", value: parseFloat(value) || 0, category, group }); }} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: t.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save</button>
+          <button onClick={() => { if (!name.trim() && !parseFloat(value)) return; const item = { name: name.trim() || "Untitled", value: parseFloat(value) || 0, category, group }; if (isLiab) { item.rate = parseFloat(rate) || 0; item.minPayment = parseFloat(minPayment) || 0; } onSave(item); }} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: t.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save</button>
         </div>
       </div>
     );
@@ -1789,6 +1804,319 @@ export default function App({ user, householdId }) {
 
   // ── AI Advisor Page ──
   if (showAdvisor && !cur) {
+    // ── Build rich financial context for AI ──
+    const buildFinancialContext = () => {
+      const now = new Date();
+      const curMonth = now.toISOString().slice(0, 7); // "2026-05"
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+      const allRoots = d.nodes.filter(n => n.parentId === null && !n.archived);
+      const allEntries = d.entries || [];
+      const cats = allCats();
+
+      // 1. Budget folder summaries
+      const folderSummaries = allRoots.map(f => {
+        const b = getNodeBalance(d.nodes, allEntries, f.id);
+        const childBudgets = d.nodes.filter(n => n.parentId === f.id).map(c => c.name);
+        return `• ${f.name}: income ${fmt(b.inc)}, expenses ${fmt(b.exp)}, balance ${fmt(b.balance)}${childBudgets.length ? ` (budgets: ${childBudgets.join(", ")})` : ""}`;
+      }).join("\n");
+      const totalBal = allRoots.reduce((s, f) => s + getNodeBalance(d.nodes, allEntries, f.id).balance, 0);
+
+      // 2. Category spending breakdown (current month)
+      const curMonthEntries = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(curMonth));
+      const catSpending = {};
+      curMonthEntries.forEach(e => {
+        const catId = e.category || "other";
+        const cat = cats.find(c => c.id === catId);
+        const label = cat ? cat.label : "Other";
+        catSpending[label] = (catSpending[label] || 0) + (e.amount || 0);
+      });
+      const sortedCats = Object.entries(catSpending).sort((a, b) => b[1] - a[1]);
+      const totalThisMonth = sortedCats.reduce((s, [, v]) => s + v, 0);
+      const catBreakdown = sortedCats.length > 0
+        ? sortedCats.map(([label, amt]) => `• ${label}: ${fmt(amt)} (${Math.round(amt / totalThisMonth * 100)}%)`).join("\n")
+        : "No expenses recorded this month yet.";
+
+      // 3. Month-over-month comparison
+      const lastMonthEntries = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(lastMonth));
+      const lastMonthTotal = lastMonthEntries.reduce((s, e) => s + (e.amount || 0), 0);
+      const lastMonthIncome = allEntries.filter(e => e.type === "income" && (e.dateISO || "").startsWith(lastMonth)).reduce((s, e) => s + (e.amount || 0), 0);
+      const curMonthIncome = allEntries.filter(e => e.type === "income" && (e.dateISO || "").startsWith(curMonth)).reduce((s, e) => s + (e.amount || 0), 0);
+      // Per-category MoM
+      const lastCatSpending = {};
+      lastMonthEntries.forEach(e => {
+        const cat = cats.find(c => c.id === (e.category || "other"));
+        const label = cat ? cat.label : "Other";
+        lastCatSpending[label] = (lastCatSpending[label] || 0) + (e.amount || 0);
+      });
+      const momChanges = sortedCats.map(([label, amt]) => {
+        const prev = lastCatSpending[label] || 0;
+        if (prev === 0) return `• ${label}: ${fmt(amt)} (new this month)`;
+        const pctChange = Math.round((amt - prev) / prev * 100);
+        return `• ${label}: ${fmt(amt)} (${pctChange >= 0 ? "+" : ""}${pctChange}% vs last month)`;
+      }).join("\n");
+
+      // 4. Recurring expense detection
+      const entryLabels = {};
+      allEntries.filter(e => e.type === "expense").forEach(e => {
+        const key = (e.label || "").toLowerCase().trim();
+        if (!key) return;
+        if (!entryLabels[key]) entryLabels[key] = { label: e.label, months: new Set(), total: 0, count: 0 };
+        if (e.dateISO) entryLabels[key].months.add(e.dateISO.slice(0, 7));
+        entryLabels[key].total += e.amount || 0;
+        entryLabels[key].count++;
+      });
+      const recurrings = Object.values(entryLabels)
+        .filter(r => r.months.size >= 2)
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10)
+        .map(r => `• ${r.label}: ~${fmt(r.total / r.count)}/occurrence, ${r.months.size} months`);
+      const recurringText = recurrings.length > 0 ? recurrings.join("\n") : "No recurring expenses detected yet.";
+
+      // 5. Savings goals
+      const goals = d.savingsGoals || [];
+      const goalsText = goals.length > 0
+        ? goals.map(g => {
+          const pct = g.target ? Math.round((g.current || 0) / g.target * 100) : 0;
+          return `• ${g.name}: ${fmt(g.current || 0)} / ${fmt(g.target || 0)} (${pct}%)`;
+        }).join("\n")
+        : "No savings goals set.";
+
+      // 6. Net worth detail
+      const manualAssets = nwItems.filter(i => i.group === "asset");
+      const manualLiabilities = nwItems.filter(i => i.group === "liability");
+      const bankAccts = getAllBankAccounts();
+      const bankAssetTotal = bankAccts.filter(a => !LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + (a.balance || 0), 0);
+      const bankLiabTotal = bankAccts.filter(a => LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + Math.abs(a.balance || 0), 0);
+      const manualAssetTotal = manualAssets.reduce((s, i) => s + (i.value || 0), 0);
+      const manualLiabTotal = manualLiabilities.reduce((s, i) => s + (i.value || 0), 0);
+      const totalAssets = bankAssetTotal + manualAssetTotal;
+      const totalLiab = bankLiabTotal + manualLiabTotal;
+      const assetDetails = [
+        ...manualAssets.map(a => `• ${a.name}: ${fmt(a.value || 0)}`),
+        ...bankAccts.filter(a => !LIABILITY_TYPES.has(a.type)).map(a => `• ${a.name} (bank): ${fmt(a.balance || 0)}`),
+      ].join("\n") || "No assets tracked.";
+      const liabDetails = [
+        ...manualLiabilities.map(a => `• ${a.name}: ${fmt(a.value || 0)}`),
+        ...bankAccts.filter(a => LIABILITY_TYPES.has(a.type)).map(a => `• ${a.name} (bank): ${fmt(Math.abs(a.balance || 0))}`),
+      ].join("\n") || "No liabilities tracked.";
+
+      // 7. Key ratios and insights
+      const savingsRate = curMonthIncome > 0 ? Math.round((curMonthIncome - totalThisMonth) / curMonthIncome * 100) : null;
+      const debtToAssetRatio = totalAssets > 0 ? Math.round(totalLiab / totalAssets * 100) : null;
+
+      return `=== MAVERICK FINANCIAL SNAPSHOT ===
+Date: ${now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+
+── BUDGET OVERVIEW ──
+${folderSummaries || "No budget folders yet."}
+Total balance across all budgets: ${fmt(totalBal)}
+
+── THIS MONTH'S SPENDING BY CATEGORY ──
+Total expenses this month: ${fmt(totalThisMonth)}
+Total income this month: ${fmt(curMonthIncome)}
+${catBreakdown}
+
+── MONTH-OVER-MONTH TRENDS ──
+Last month expenses: ${fmt(lastMonthTotal)} → This month: ${fmt(totalThisMonth)} (${lastMonthTotal > 0 ? (totalThisMonth > lastMonthTotal ? "+" : "") + Math.round((totalThisMonth - lastMonthTotal) / lastMonthTotal * 100) + "%" : "N/A"})
+Last month income: ${fmt(lastMonthIncome)} → This month: ${fmt(curMonthIncome)}
+${momChanges || "Not enough data for comparison."}
+
+── RECURRING EXPENSES (auto-detected) ──
+${recurringText}
+
+── SAVINGS GOALS ──
+${goalsText}
+
+── NET WORTH ──
+Total Assets: ${fmt(totalAssets)}
+${assetDetails}
+Total Liabilities: ${fmt(totalLiab)}
+${liabDetails}
+Net Worth: ${fmt(totalAssets - totalLiab)}
+
+── KEY METRICS ──
+${savingsRate !== null ? `Savings Rate: ${savingsRate}% of income${savingsRate < 20 ? " (below 20% target)" : " (healthy)"}` : "Savings rate: not enough income data"}
+${debtToAssetRatio !== null ? `Debt-to-Asset Ratio: ${debtToAssetRatio}%${debtToAssetRatio > 50 ? " (high — focus on debt reduction)" : " (manageable)"}` : "Debt-to-asset ratio: no asset/liability data"}
+=== END SNAPSHOT ===`;
+    };
+
+    // ── Proactive Insights Engine ──
+    const generateInsights = () => {
+      const insights = [];
+      const now = new Date();
+      const curMonth = now.toISOString().slice(0, 7);
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+      const allEntries = d.entries || [];
+      const cats = allCats();
+
+      // Current vs last month totals
+      const curExpenses = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(curMonth));
+      const lastExpenses = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(lastMonth));
+      const curTotal = curExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+      const lastTotal = lastExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+      const curIncome = allEntries.filter(e => e.type === "income" && (e.dateISO || "").startsWith(curMonth)).reduce((s, e) => s + (e.amount || 0), 0);
+
+      // 1. Spending spike detection per category
+      const curCatTotals = {};
+      const lastCatTotals = {};
+      curExpenses.forEach(e => { const c = cats.find(ct => ct.id === (e.category || "other")); const l = c ? c.label : "Other"; curCatTotals[l] = (curCatTotals[l] || 0) + (e.amount || 0); });
+      lastExpenses.forEach(e => { const c = cats.find(ct => ct.id === (e.category || "other")); const l = c ? c.label : "Other"; lastCatTotals[l] = (lastCatTotals[l] || 0) + (e.amount || 0); });
+      Object.entries(curCatTotals).forEach(([cat, amt]) => {
+        const prev = lastCatTotals[cat] || 0;
+        if (prev > 0 && amt > prev * 1.3 && amt - prev > 20) {
+          const pct = Math.round((amt - prev) / prev * 100);
+          insights.push({ type: "warning", icon: "📈", title: `${cat} spending up ${pct}%`, sub: `${fmt(amt)} vs ${fmt(prev)} last month`, action: `Why is my ${cat.toLowerCase()} spending up this month?` });
+        }
+      });
+
+      // 2. Savings rate check
+      if (curIncome > 0) {
+        const rate = Math.round((curIncome - curTotal) / curIncome * 100);
+        if (rate < 10) insights.push({ type: "alert", icon: "⚠️", title: `Savings rate: ${rate}%`, sub: "Below the 20% recommended target", action: "How can I improve my savings rate?" });
+        else if (rate >= 30) insights.push({ type: "positive", icon: "🎉", title: `Saving ${rate}% of income`, sub: "Great job — above the 20% target!", action: "What should I do with my extra savings?" });
+      }
+
+      // 3. Unallocated cash suggestion
+      const allRoots = d.nodes.filter(n => n.parentId === null && !n.archived);
+      const totalBal = allRoots.reduce((s, f) => s + getNodeBalance(d.nodes, allEntries, f.id).balance, 0);
+      if (totalBal > 500) insights.push({ type: "suggestion", icon: "💡", title: `${fmt(totalBal)} unallocated`, sub: "Consider moving some to savings or investments", action: `I have ${fmt(totalBal)} in my budget balance. Where should I put it?` });
+
+      // 4. Savings goals at risk
+      (d.savingsGoals || []).forEach(g => {
+        if (g.target && g.current !== undefined) {
+          const pct = Math.round((g.current || 0) / g.target * 100);
+          if (pct >= 90 && pct < 100) insights.push({ type: "positive", icon: "🏁", title: `Almost there: ${g.name}`, sub: `${pct}% complete — ${fmt(g.target - (g.current || 0))} to go!`, action: `How can I close the gap on my ${g.name} goal?` });
+          else if (pct < 25 && g.target > 100) insights.push({ type: "warning", icon: "🎯", title: `${g.name}: ${pct}% funded`, sub: `${fmt(g.current || 0)} of ${fmt(g.target)} target`, action: `Help me create a plan to reach my ${g.name} goal` });
+        }
+      });
+
+      // 5. High debt-to-asset ratio
+      const manualAssets = nwItems.filter(i => i.group === "asset").reduce((s, i) => s + (i.value || 0), 0);
+      const manualLiab = nwItems.filter(i => i.group === "liability").reduce((s, i) => s + (i.value || 0), 0);
+      const bankAccts = getAllBankAccounts();
+      const totalAssets = manualAssets + bankAccts.filter(a => !LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + (a.balance || 0), 0);
+      const totalLiab = manualLiab + bankAccts.filter(a => LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + Math.abs(a.balance || 0), 0);
+      if (totalLiab > 0 && totalAssets > 0 && totalLiab / totalAssets > 0.5) {
+        insights.push({ type: "alert", icon: "🏦", title: `Debt-to-asset: ${Math.round(totalLiab / totalAssets * 100)}%`, sub: "Above 50% — debt reduction should be a priority", action: "Help me make a debt payoff plan" });
+      }
+
+      // 6. Monthly spending trend
+      if (lastTotal > 0 && curTotal > lastTotal * 1.15) {
+        insights.push({ type: "warning", icon: "📊", title: `Overall spending up ${Math.round((curTotal - lastTotal) / lastTotal * 100)}%`, sub: `${fmt(curTotal)} this month vs ${fmt(lastTotal)} last month`, action: "Where am I overspending compared to last month?" });
+      } else if (lastTotal > 0 && curTotal < lastTotal * 0.85) {
+        insights.push({ type: "positive", icon: "📉", title: `Spending down ${Math.round((lastTotal - curTotal) / lastTotal * 100)}%`, sub: `${fmt(curTotal)} this month vs ${fmt(lastTotal)} last month`, action: "I've cut spending — where should I put the savings?" });
+      }
+
+      // 7. Recurring expense optimization
+      const entryLabels = {};
+      allEntries.filter(e => e.type === "expense").forEach(e => {
+        const key = (e.label || "").toLowerCase().trim();
+        if (!key) return;
+        if (!entryLabels[key]) entryLabels[key] = { label: e.label, months: new Set(), total: 0, count: 0 };
+        if (e.dateISO) entryLabels[key].months.add(e.dateISO.slice(0, 7));
+        entryLabels[key].total += e.amount || 0;
+        entryLabels[key].count++;
+      });
+      const subscriptions = Object.values(entryLabels).filter(r => r.months.size >= 3);
+      const subTotal = subscriptions.reduce((s, r) => s + r.total / r.count, 0);
+      if (subscriptions.length >= 3) {
+        insights.push({ type: "suggestion", icon: "🔄", title: `${subscriptions.length} recurring expenses`, sub: `~${fmt(subTotal)}/month in subscriptions`, action: "Review my recurring expenses and suggest what to cut" });
+      }
+
+      return insights.slice(0, 4); // Max 4 insight cards
+    };
+
+    // ── Debt Payoff Calculator ──
+    const calcDebtPayoff = () => {
+      const debts = [
+        ...nwItems.filter(i => i.group === "liability").map(i => ({ name: i.name, balance: i.value || 0, rate: i.rate || 0, minPayment: i.minPayment || 0 })),
+        ...getAllBankAccounts().filter(a => LIABILITY_TYPES.has(a.type)).map(a => ({ name: a.name, balance: Math.abs(a.balance || 0), rate: a.rate || 0, minPayment: a.minPayment || 0 })),
+      ].filter(d => d.balance > 0);
+      if (debts.length === 0) return null;
+
+      const extra = parseFloat(debtExtra) || 0;
+      const sorted = debtStrategy === "avalanche"
+        ? [...debts].sort((a, b) => b.rate - a.rate)
+        : [...debts].sort((a, b) => a.balance - b.balance);
+
+      // Simulate payoff
+      let remaining = sorted.map(d => ({ ...d, bal: d.balance }));
+      let month = 0;
+      let totalInterest = 0;
+      const timeline = [];
+      const maxMonths = 360; // 30 year cap
+
+      while (remaining.some(d => d.bal > 0) && month < maxMonths) {
+        month++;
+        let extraLeft = extra;
+        // Apply interest
+        remaining.forEach(d => {
+          if (d.bal > 0) {
+            const interest = d.bal * (d.rate / 100 / 12);
+            d.bal += interest;
+            totalInterest += interest;
+          }
+        });
+        // Pay minimums
+        remaining.forEach(d => {
+          if (d.bal > 0) {
+            const payment = Math.min(d.minPayment || 25, d.bal);
+            d.bal -= payment;
+          }
+        });
+        // Apply extra to highest priority
+        for (const d of remaining) {
+          if (d.bal > 0 && extraLeft > 0) {
+            const payment = Math.min(extraLeft, d.bal);
+            d.bal -= payment;
+            extraLeft -= payment;
+          }
+        }
+        const totalBal = remaining.reduce((s, d) => s + Math.max(0, d.bal), 0);
+        if (month % 3 === 0 || totalBal === 0) timeline.push({ month, balance: totalBal });
+        remaining = remaining.map(d => ({ ...d, bal: Math.max(0, d.bal) }));
+      }
+
+      const totalDebt = debts.reduce((s, d) => s + d.balance, 0);
+      const payoffDate = new Date();
+      payoffDate.setMonth(payoffDate.getMonth() + month);
+      return { debts: sorted, totalDebt, totalInterest, months: month, payoffDate, timeline, strategy: debtStrategy };
+    };
+
+    // ── What-If Scenario Engine ──
+    const calcWhatIf = () => {
+      const allEntries = d.entries || [];
+      const cats = allCats();
+      const now = new Date();
+      const curMonth = now.toISOString().slice(0, 7);
+      const curExpenses = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(curMonth));
+      const curIncome = allEntries.filter(e => e.type === "income" && (e.dateISO || "").startsWith(curMonth)).reduce((s, e) => s + (e.amount || 0), 0);
+
+      const catTotals = {};
+      curExpenses.forEach(e => {
+        const catId = e.category || "other";
+        const cat = cats.find(c => c.id === catId);
+        catTotals[catId] = { label: cat?.label || "Other", icon: cat?.icon || "📋", amount: (catTotals[catId]?.amount || 0) + (e.amount || 0) };
+      });
+
+      const months = parseInt(whatIfMonths) || 12;
+      let currentMonthly = Object.values(catTotals).reduce((s, c) => s + c.amount, 0);
+      let projectedMonthly = 0;
+      const catDetails = Object.entries(catTotals).map(([id, c]) => {
+        const cut = whatIfCuts[id] || 0;
+        const projected = c.amount * (1 - cut / 100);
+        projectedMonthly += projected;
+        return { id, ...c, cut, projected, saved: c.amount - projected };
+      }).sort((a, b) => b.amount - a.amount);
+
+      const monthlySaved = currentMonthly - projectedMonthly;
+      const totalSaved = monthlySaved * months;
+      const currentSavings = curIncome - currentMonthly;
+      const projectedSavings = curIncome - projectedMonthly;
+
+      return { catDetails, currentMonthly, projectedMonthly, monthlySaved, totalSaved, months, currentSavings, projectedSavings, income: curIncome };
+    };
+
     const sendToAdvisor = async () => {
       const msg = advisorInput.trim();
       if (!msg || advisorLoading) return;
@@ -1796,83 +2124,365 @@ export default function App({ user, householdId }) {
       setAdvisorMessages(prev => [...prev, { role: "user", content: msg }]);
       setAdvisorLoading(true);
       try {
-        // Build financial context
-        const allRoots = d.nodes.filter(n => n.parentId === null && !n.archived);
-        const summary = allRoots.map(f => {
-          const b = getNodeBalance(d.nodes, d.entries, f.id);
-          return `${f.name}: income ${fmt(b.inc)}, expenses ${fmt(b.exp)}, balance ${fmt(b.balance)}`;
-        }).join("; ");
-        const totalBal = allRoots.reduce((s, f) => s + getNodeBalance(d.nodes, d.entries, f.id).balance, 0);
-        const nwAssets = nwItems.filter(i => i.group === "asset").reduce((s, i) => s + (i.value || 0), 0);
-        const nwLiab = nwItems.filter(i => i.group === "liability").reduce((s, i) => s + (i.value || 0), 0);
-        const context = `User's financial data — Budget folders: ${summary || "none"}. Total budget balance: ${fmt(totalBal)}. Net worth assets: ${fmt(nwAssets)}, liabilities: ${fmt(nwLiab)}, net worth: ${fmt(nwAssets - nwLiab)}.`;
-        const systemPrompt = `You are Maverick AI, a friendly personal finance advisor inside the Maverick Budget app. You have access to the user's financial data below. Give concise, actionable advice. Be warm and encouraging. Keep responses under 150 words.\n\n${context}`;
-        const history = [...advisorMessages.slice(-8), { role: "user", content: msg }];
+        const context = buildFinancialContext();
+        const systemPrompt = `You are Maverick AI, a sharp and friendly personal finance advisor built into the Maverick Budget app. You have real-time access to the user's complete financial data below.
+
+GUIDELINES:
+- Give specific, actionable advice referencing their actual numbers
+- When discussing spending, cite the exact categories and amounts
+- Compare to common benchmarks (50/30/20 rule, 3-6 month emergency fund, etc.)
+- If they ask about debt, reference their actual liabilities and suggest strategies
+- Be warm and encouraging but honest about areas for improvement
+- Use their savings goals to personalize recommendations
+- When you spot concerning trends (rising spending, low savings rate), flag them proactively
+- Keep responses concise (under 200 words) but data-rich
+- Use dollar amounts from their data, not generic advice
+- If asked about something not in the data, say so honestly
+
+${context}`;
+        const history = [...advisorMessages.slice(-10), { role: "user", content: msg }];
 
         const resp = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-api-key": localStorage.getItem("maverick-ai-key") || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-          body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 512, system: systemPrompt, messages: history.map(m => ({ role: m.role, content: m.content })) }),
+          body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 800, system: systemPrompt, messages: history.map(m => ({ role: m.role, content: m.content })) }),
         });
         if (!resp.ok) throw new Error("API error");
         const data = await resp.json();
         const reply = data.content?.[0]?.text || "Sorry, I couldn't process that. Please try again.";
         setAdvisorMessages(prev => [...prev, { role: "assistant", content: reply }]);
       } catch (err) {
-        setAdvisorMessages(prev => [...prev, { role: "assistant", content: "To use AI Advisor, add your Anthropic API key in settings below.\n\nTap the key icon to set it up." }]);
+        setAdvisorMessages(prev => [...prev, { role: "assistant", content: "To use AI Advisor, add your Anthropic API key in settings below.\n\nTap the 🔑 icon to set it up." }]);
       }
       setAdvisorLoading(false);
     };
 
+    const debtPayoff = calcDebtPayoff();
+    const whatIf = calcWhatIf();
+    const advisorTabs = [
+      { id: "chat", icon: "💬", label: "Chat" },
+      { id: "debt", icon: "📋", label: "Debt Plan" },
+      { id: "whatif", icon: "🔮", label: "What-If" },
+      { id: "bills", icon: "📞", label: "Bill Tips" },
+    ];
+
+    // Bill negotiation scripts
+    const billScripts = [
+      { category: "Internet/Cable", icon: "📡", tips: [
+        "Call retention department — say 'I'd like to cancel' to get routed there",
+        "Reference competitor pricing: 'I see [competitor] offers similar speed for $X/mo'",
+        "Ask about unadvertised loyalty discounts or promotional rates",
+        "Request a 'rate review' — many reps can apply 10-20% discounts instantly",
+      ]},
+      { category: "Insurance", icon: "🛡️", tips: [
+        "Bundle home + auto for 10-25% discount",
+        "Ask about increasing deductibles to lower premiums",
+        "Request a policy review — life changes often unlock new discounts",
+        "Get 3 competing quotes and present the lowest to your current provider",
+      ]},
+      { category: "Phone Plan", icon: "📱", tips: [
+        "Check if you're using all your data — downgrade if not",
+        "Ask about autopay and paperless billing discounts ($5-10/mo each)",
+        "Consider MVNOs (Mint, Visible, Cricket) — same networks, 50-70% cheaper",
+        "Negotiate as a family: multi-line plans often have per-line discounts",
+      ]},
+      { category: "Subscriptions", icon: "🔄", tips: [
+        "Audit all subscriptions — cancel anything unused for 30+ days",
+        "Use annual billing to save 15-30% vs monthly",
+        "Try canceling — many services offer 50% off to retain you",
+        "Share family plans with household members to split costs",
+      ]},
+      { category: "Medical Bills", icon: "🏥", tips: [
+        "Always request an itemized bill — errors are common (up to 80%)",
+        "Ask about cash pay discount (often 20-50% off)",
+        "Negotiate a payment plan with 0% interest before it goes to collections",
+        "Check if you qualify for financial assistance or charity care programs",
+      ]},
+      { category: "Rent", icon: "🏠", tips: [
+        "Sign a longer lease (18-24 months) for a lower monthly rate",
+        "Offer to pay several months upfront for a discount",
+        "Point out comparable units in the area at lower prices",
+        "Offer to handle minor maintenance yourself in exchange for reduced rent",
+      ]},
+    ];
+
     return shell(
       <div style={{ padding: "24px 20px 0", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", height: "100vh", height: "-webkit-fill-available" }}>
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexShrink: 0 }}>
           <button onClick={() => { goHome(); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
-          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text }}>AI Advisor</h1>
-          <button onClick={() => { const key = prompt("Enter your Anthropic API key:", localStorage.getItem("maverick-ai-key") || ""); if (key !== null) { localStorage.setItem("maverick-ai-key", key); haptic(); } }} style={{ marginLeft: "auto", background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px", cursor: "pointer", fontSize: 16 }} title="Set API key">🔑</button>
+          <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: t.text }}>AI Advisor</h1>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {advisorMessages.length > 0 && <button onClick={() => { if (confirm("Clear conversation history?")) { setAdvisorMessages([]); haptic(); } }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px", cursor: "pointer", fontSize: 12 }} title="Clear history">🗑️</button>}
+            <button onClick={() => { const key = prompt("Enter your Anthropic API key:", localStorage.getItem("maverick-ai-key") || ""); if (key !== null) { localStorage.setItem("maverick-ai-key", key); haptic(); } }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px", cursor: "pointer", fontSize: 14 }} title="Set API key">🔑</button>
+          </div>
         </div>
 
-        {/* Messages */}
-        <div style={{ flex: 1, overflowY: "auto", marginBottom: 12, paddingBottom: 8 }}>
-          {advisorMessages.length === 0 && (
-            <div style={{ textAlign: "center", padding: "40px 16px", color: t.textMuted }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>🤖</div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: t.text, marginBottom: 8 }}>Maverick AI</div>
-              <div style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>Your personal financial strategist. Ask about budgeting, saving, investing, or debt payoff strategies.</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {["How can I save more each month?", "What's my financial health look like?", "Help me make a debt payoff plan"].map(q => (
-                  <button key={q} onClick={() => { setAdvisorInput(q); }} style={{ padding: "10px 14px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "rgba(255,255,255,0.02)", color: t.textSub, fontSize: 12, cursor: "pointer", textAlign: "left" }}>{q}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          {advisorMessages.map((msg, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", marginBottom: 8 }}>
-              <div style={{
-                maxWidth: "85%", padding: "10px 14px", borderRadius: 14, fontSize: 13, lineHeight: 1.5,
-                background: msg.role === "user" ? t.accent : t.card,
-                color: msg.role === "user" ? "#fff" : t.text,
-                border: msg.role === "user" ? "none" : `1px solid ${t.cardBorder}`,
-                borderBottomRightRadius: msg.role === "user" ? 4 : 14,
-                borderBottomLeftRadius: msg.role === "user" ? 14 : 4,
-                whiteSpace: "pre-wrap",
-              }}>{msg.content}</div>
-            </div>
+        {/* Tool tabs */}
+        <div style={{ display: "flex", gap: 4, marginBottom: 12, flexShrink: 0, overflowX: "auto" }}>
+          {advisorTabs.map(tab => (
+            <button key={tab.id} onClick={() => { setAdvisorTab(tab.id); haptic(); }} style={{
+              padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", transition: "all 0.2s", display: "flex", alignItems: "center", gap: 4,
+              background: advisorTab === tab.id ? `${t.accent}25` : t.surface,
+              color: advisorTab === tab.id ? t.accentLight : t.textSub,
+            }}><span style={{ fontSize: 13 }}>{tab.icon}</span>{tab.label}</button>
           ))}
-          {advisorLoading && (
-            <div style={{ display: "flex", gap: 4, padding: "10px 14px" }}>
-              {[0, 1, 2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: 3, background: t.textMuted, animation: `pulse 1.2s ease infinite ${i * 0.2}s` }} />)}
-            </div>
-          )}
         </div>
 
-        {/* Input */}
-        <div style={{ display: "flex", gap: 8, padding: "12px 0 calc(12px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${t.cardBorder}`, flexShrink: 0 }}>
-          <input value={advisorInput} onChange={e => setAdvisorInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendToAdvisor(); } }}
-            placeholder="Ask about your finances..." style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, outline: "none" }} />
-          <button onClick={sendToAdvisor} disabled={advisorLoading || !advisorInput.trim()} style={{ padding: "10px 16px", borderRadius: 10, border: "none", background: advisorInput.trim() ? t.accent : t.surface, color: advisorInput.trim() ? "#fff" : t.textDim, fontSize: 14, fontWeight: 600, cursor: advisorInput.trim() ? "pointer" : "default", transition: "all 0.2s" }}>↑</button>
-        </div>
+        {/* Tab: Chat */}
+        {advisorTab === "chat" && (<>
+          <div style={{ flex: 1, overflowY: "auto", marginBottom: 12, paddingBottom: 8 }}>
+            {advisorMessages.length === 0 && (
+              <div style={{ textAlign: "center", padding: "30px 16px", color: t.textMuted }}>
+                <div style={{ fontSize: 36, marginBottom: 10 }}>🤖</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 6 }}>Maverick AI</div>
+                <div style={{ fontSize: 11, lineHeight: 1.5, marginBottom: 14 }}>Your financial strategist with full access to your spending, trends, goals, and net worth.</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  {["Where am I overspending this month?", "Give me a full financial health check", "What recurring expenses could I cut?", "Help me make a debt payoff plan", "Am I on track with my savings goals?"].map(q => (
+                    <button key={q} onClick={() => { setAdvisorInput(q); }} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "rgba(255,255,255,0.02)", color: t.textSub, fontSize: 11, cursor: "pointer", textAlign: "left" }}>{q}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {advisorMessages.map((msg, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", marginBottom: 8 }}>
+                <div style={{
+                  maxWidth: "85%", padding: "10px 14px", borderRadius: 14, fontSize: 13, lineHeight: 1.5,
+                  background: msg.role === "user" ? t.accent : t.card,
+                  color: msg.role === "user" ? "#fff" : t.text,
+                  border: msg.role === "user" ? "none" : `1px solid ${t.cardBorder}`,
+                  borderBottomRightRadius: msg.role === "user" ? 4 : 14,
+                  borderBottomLeftRadius: msg.role === "user" ? 14 : 4,
+                  whiteSpace: "pre-wrap",
+                }}>{msg.content}</div>
+              </div>
+            ))}
+            {advisorLoading && (
+              <div style={{ display: "flex", gap: 4, padding: "10px 14px" }}>
+                {[0, 1, 2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: 3, background: t.textMuted, animation: `pulse 1.2s ease infinite ${i * 0.2}s` }} />)}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, padding: "12px 0 calc(12px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${t.cardBorder}`, flexShrink: 0 }}>
+            <input value={advisorInput} onChange={e => setAdvisorInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendToAdvisor(); } }}
+              placeholder="Ask about your finances..." style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, outline: "none" }} />
+            <button onClick={sendToAdvisor} disabled={advisorLoading || !advisorInput.trim()} style={{ padding: "10px 16px", borderRadius: 10, border: "none", background: advisorInput.trim() ? t.accent : t.surface, color: advisorInput.trim() ? "#fff" : t.textDim, fontSize: 14, fontWeight: 600, cursor: advisorInput.trim() ? "pointer" : "default", transition: "all 0.2s" }}>↑</button>
+          </div>
+        </>)}
+
+        {/* Tab: Debt Payoff Planner */}
+        {advisorTab === "debt" && (
+          <div style={{ flex: 1, overflowY: "auto", paddingBottom: "calc(20px + env(safe-area-inset-bottom, 0px))" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 12 }}>Debt Payoff Planner</div>
+
+            {/* Strategy toggle */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              {[{ id: "avalanche", label: "Avalanche", sub: "Highest rate first" }, { id: "snowball", label: "Snowball", sub: "Smallest balance first" }].map(s => (
+                <button key={s.id} onClick={() => { setDebtStrategy(s.id); haptic(); }} style={{
+                  flex: 1, padding: "10px 8px", borderRadius: 10, border: `1px solid ${debtStrategy === s.id ? t.accent + "50" : t.cardBorder}`, cursor: "pointer", textAlign: "center",
+                  background: debtStrategy === s.id ? `${t.accent}15` : t.surface, transition: "all 0.2s",
+                }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: debtStrategy === s.id ? t.accentLight : t.text }}>{s.label}</div>
+                  <div style={{ fontSize: 9, color: t.textMuted, marginTop: 2 }}>{s.sub}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Extra payment input */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: t.textMuted, fontWeight: 600, whiteSpace: "nowrap" }}>Extra/month:</div>
+              <input value={debtExtra} onChange={e => setDebtExtra(e.target.value)} type="number" inputMode="decimal" style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 16, fontWeight: 600, textAlign: "right" }} />
+            </div>
+
+            {debtPayoff ? (<>
+              {/* Summary cards */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+                <div style={{ padding: "12px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Total Debt</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: t.exp }}>{fmt(debtPayoff.totalDebt)}</div>
+                </div>
+                <div style={{ padding: "12px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Payoff Date</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>{debtPayoff.payoffDate.toLocaleDateString("en-US", { month: "short", year: "numeric" })}</div>
+                  <div style={{ fontSize: 10, color: t.textMuted }}>{debtPayoff.months} months</div>
+                </div>
+                <div style={{ padding: "12px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Total Interest</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#f59e0b" }}>{fmt(debtPayoff.totalInterest)}</div>
+                </div>
+                <div style={{ padding: "12px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Strategy</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: t.accentLight }}>{debtStrategy === "avalanche" ? "⚡ Avalanche" : "☃️ Snowball"}</div>
+                </div>
+              </div>
+
+              {/* Payoff order */}
+              <div style={{ fontSize: 11, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Payoff Order</div>
+              {debtPayoff.debts.map((d, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: i === 0 ? `${t.accent}08` : "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, borderLeft: i === 0 ? `3px solid ${t.accent}` : "3px solid transparent" }}>
+                  <div style={{ width: 24, height: 24, borderRadius: 12, background: i === 0 ? t.accent : t.surface, color: i === 0 ? "#fff" : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{i + 1}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{d.name}</div>
+                    <div style={{ fontSize: 10, color: t.textMuted }}>{d.rate > 0 ? `${d.rate}% APR` : "No rate set"}{d.minPayment > 0 ? ` · ${fmt(d.minPayment)} min` : ""}</div>
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: t.exp, fontFamily: t.mono }}>{fmt(d.balance)}</div>
+                </div>
+              ))}
+
+              {/* Progress chart */}
+              {debtPayoff.timeline.length > 1 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 11, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Projected Balance</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 80, padding: "0 4px" }}>
+                    {debtPayoff.timeline.map((p, i) => {
+                      const maxBal = debtPayoff.timeline[0]?.balance || 1;
+                      const h = Math.max(2, (p.balance / maxBal) * 70);
+                      return (<div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                        <div style={{ width: "100%", height: h, background: `linear-gradient(to top, ${t.exp}60, ${t.exp}20)`, borderRadius: 3, minWidth: 4, transition: "height 0.3s" }} />
+                        {i % 4 === 0 && <div style={{ fontSize: 7, color: t.textDim }}>{p.month}mo</div>}
+                      </div>);
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Tip */}
+              <div style={{ marginTop: 16, padding: "10px 14px", background: `${t.accent}08`, border: `1px solid ${t.accent}20`, borderRadius: 10 }}>
+                <div style={{ fontSize: 11, color: t.accentLight, fontWeight: 600, marginBottom: 4 }}>💡 Tip</div>
+                <div style={{ fontSize: 11, color: t.textSub, lineHeight: 1.5 }}>
+                  {debtStrategy === "avalanche" ? "Avalanche saves the most in interest. Focus extra payments on your highest-rate debt first." : "Snowball builds momentum. Paying off small debts first creates quick wins that keep you motivated."}
+                  {" "}To set interest rates and minimum payments, edit your liabilities on the Net Worth page.
+                </div>
+              </div>
+
+              {/* Ask AI button */}
+              <button onClick={() => { setAdvisorTab("chat"); setAdvisorInput(`Analyze my debt situation: I have ${fmt(debtPayoff.totalDebt)} in total debt. Using the ${debtStrategy} method with $${debtExtra}/mo extra, it'll take ${debtPayoff.months} months. Is this plan good? Any suggestions?`); haptic(); }}
+                style={{ marginTop: 12, width: "100%", padding: "12px 0", borderRadius: 10, border: "none", background: t.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Ask AI About My Debt Plan</button>
+            </>) : (
+              <div style={{ textAlign: "center", padding: "40px 16px", color: t.textMuted }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 6 }}>No debts to pay off</div>
+                <div style={{ fontSize: 12 }}>Add liabilities on the Net Worth page to use the debt planner.</div>
+                <button onClick={() => { setShowNetWorth(true); setShowAdvisor(false); haptic(); }} style={{ marginTop: 12, padding: "10px 20px", borderRadius: 8, border: "none", background: t.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Go to Net Worth</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab: What-If Simulator */}
+        {advisorTab === "whatif" && (
+          <div style={{ flex: 1, overflowY: "auto", paddingBottom: "calc(20px + env(safe-area-inset-bottom, 0px))" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 4 }}>What-If Simulator</div>
+            <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 12 }}>Drag sliders to model spending cuts and see projected savings.</div>
+
+            {/* Time horizon */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: t.textMuted, fontWeight: 600 }}>Projection:</div>
+              {["3", "6", "12", "24"].map(m => (
+                <button key={m} onClick={() => { setWhatIfMonths(m); haptic(); }} style={{
+                  padding: "5px 10px", borderRadius: 6, border: "none", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  background: whatIfMonths === m ? t.accent : "transparent", color: whatIfMonths === m ? "#fff" : t.textSub,
+                }}>{m}mo</button>
+              ))}
+            </div>
+
+            {/* Category sliders */}
+            {whatIf.catDetails.length > 0 ? (<>
+              {whatIf.catDetails.map(cat => (
+                <div key={cat.id} style={{ marginBottom: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 14 }}>{cat.icon}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{cat.label}</span>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: cat.cut > 0 ? t.inc : t.text, fontFamily: t.mono }}>{fmt(cat.projected)}</span>
+                      {cat.cut > 0 && <span style={{ fontSize: 10, color: t.textMuted, marginLeft: 4, textDecoration: "line-through" }}>{fmt(cat.amount)}</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input type="range" min="0" max="100" step="5" value={whatIfCuts[cat.id] || 0}
+                      onChange={e => setWhatIfCuts({ ...whatIfCuts, [cat.id]: parseInt(e.target.value) })}
+                      style={{ flex: 1, accentColor: t.accent, height: 4 }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: (whatIfCuts[cat.id] || 0) > 0 ? t.inc : t.textDim, minWidth: 36, textAlign: "right" }}>
+                      {(whatIfCuts[cat.id] || 0) > 0 ? `-${whatIfCuts[cat.id]}%` : "0%"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+
+              {/* Projection results */}
+              <div style={{ marginTop: 12, padding: "14px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12 }}>
+                <div style={{ fontSize: 11, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>{whatIf.months}-Month Projection</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase" }}>Monthly Saved</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: whatIf.monthlySaved > 0 ? t.inc : t.textDim }}>{whatIf.monthlySaved > 0 ? "+" : ""}{fmt(whatIf.monthlySaved)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase" }}>Total Saved</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: whatIf.totalSaved > 0 ? t.inc : t.textDim }}>{whatIf.totalSaved > 0 ? "+" : ""}{fmt(whatIf.totalSaved)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase" }}>Current Savings</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: whatIf.currentSavings >= 0 ? t.text : t.exp }}>{fmt(whatIf.currentSavings)}/mo</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase" }}>Projected Savings</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: whatIf.projectedSavings >= 0 ? t.inc : t.exp }}>{fmt(whatIf.projectedSavings)}/mo</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Ask AI */}
+              {whatIf.monthlySaved > 0 && (
+                <button onClick={() => {
+                  const cuts = whatIf.catDetails.filter(c => c.cut > 0).map(c => `${c.label} by ${c.cut}%`).join(", ");
+                  setAdvisorTab("chat");
+                  setAdvisorInput(`I'm considering cutting: ${cuts}. That would save me ${fmt(whatIf.monthlySaved)}/month (${fmt(whatIf.totalSaved)} over ${whatIf.months} months). Is this realistic? What's the best way to implement these cuts?`);
+                  haptic();
+                }} style={{ marginTop: 12, width: "100%", padding: "12px 0", borderRadius: 10, border: "none", background: t.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Ask AI to Evaluate This Plan</button>
+              )}
+            </>) : (
+              <div style={{ textAlign: "center", padding: "40px 16px", color: t.textMuted }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>🔮</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 6 }}>No spending data yet</div>
+                <div style={{ fontSize: 12 }}>Add transactions with categories to model what-if scenarios.</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab: Bill Negotiation */}
+        {advisorTab === "bills" && (
+          <div style={{ flex: 1, overflowY: "auto", paddingBottom: "calc(20px + env(safe-area-inset-bottom, 0px))" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 4 }}>Bill Negotiation Scripts</div>
+            <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 14 }}>Proven strategies to lower your monthly bills. Tap any category for scripts you can use on your next call.</div>
+
+            {billScripts.map(bill => (
+              <details key={bill.category} style={{ marginBottom: 8 }}>
+                <summary style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, cursor: "pointer", listStyle: "none", WebkitAppearance: "none" }}>
+                  <span style={{ fontSize: 20 }}>{bill.icon}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{bill.category}</div>
+                    <div style={{ fontSize: 10, color: t.textMuted }}>{bill.tips.length} negotiation tips</div>
+                  </div>
+                  <span style={{ fontSize: 14, color: t.textSub, transition: "transform 0.2s" }}>▸</span>
+                </summary>
+                <div style={{ padding: "8px 14px 12px", marginTop: -2, background: `${t.card}80`, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, border: `1px solid ${t.cardBorder}`, borderTop: "none" }}>
+                  {bill.tips.map((tip, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, padding: "8px 0", borderBottom: i < bill.tips.length - 1 ? `1px solid ${t.cardBorder}` : "none" }}>
+                      <div style={{ width: 18, height: 18, borderRadius: 9, background: `${t.accent}15`, color: t.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, flexShrink: 0, marginTop: 1 }}>{i + 1}</div>
+                      <div style={{ fontSize: 12, color: t.textSub, lineHeight: 1.5 }}>{tip}</div>
+                    </div>
+                  ))}
+                  <button onClick={() => { setAdvisorTab("chat"); setAdvisorInput(`I want to negotiate my ${bill.category.toLowerCase()} bill. Give me a step-by-step script I can use on the phone, including what to say when they push back.`); haptic(); }}
+                    style={{ marginTop: 8, width: "100%", padding: "10px 0", borderRadius: 8, border: "none", background: `${t.accent}15`, color: t.accentLight, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Get Personalized Script from AI</button>
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -2194,6 +2804,33 @@ export default function App({ user, householdId }) {
             </button>
           ))}
         </div>
+
+        {/* Proactive Insights */}
+        {(() => {
+          const insights = generateInsights();
+          if (insights.length === 0) return null;
+          const colors = { warning: "#f59e0b", alert: "#ef4444", positive: "#22c55e", suggestion: t.accent };
+          return (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 8, paddingLeft: 2 }}>Insights</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {insights.map((ins, i) => (
+                  <div key={i} onClick={() => { if (ins.action) { setShowAdvisor(true); setAdvisorTab("chat"); setAdvisorInput(ins.action); haptic(); } }}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: `${colors[ins.type]}08`, border: `1px solid ${colors[ins.type]}20`, borderRadius: 10, cursor: ins.action ? "pointer" : "default", transition: "background 0.15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = `${colors[ins.type]}15`}
+                    onMouseLeave={e => e.currentTarget.style.background = `${colors[ins.type]}08`}>
+                    <span style={{ fontSize: 18, flexShrink: 0 }}>{ins.icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{ins.title}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>{ins.sub}</div>
+                    </div>
+                    {ins.action && <span style={{ fontSize: 12, color: colors[ins.type], opacity: 0.6, flexShrink: 0 }}>Ask AI ›</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Recent Activity */}
         {recentEntries.length > 0 && (
