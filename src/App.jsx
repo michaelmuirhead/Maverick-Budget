@@ -180,7 +180,7 @@ function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
 
 // ── Recurrings on load ──
 function processRecurrings(data) {
-  return { ...data, limits: data.limits || {} };
+  return data;
 }
 
 // ── CSV ──
@@ -202,7 +202,7 @@ import { db, auth, signOut, doc, setDoc, onSnapshot, collection, requestNotifica
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
 
-const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], limits: {}, customCategories: [], envelopes: {}, savingsGoals: [], bankAccount: {}, bankAccounts: {} };
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {} };
 
 function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
@@ -219,7 +219,7 @@ function useApp(user, householdId) {
       if (skipNextRemote.current) { skipNextRemote.current = false; return; }
       if (snap.exists()) {
         const r = snap.data();
-        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], limits: r.limits||{}, customCategories: r.customCategories||[], envelopes: r.envelopes||{}, savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{} }));
+        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], customCategories: r.customCategories||[], savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{} }));
       }
       setSynced(true);
     }, () => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {} setSynced(true); });
@@ -252,19 +252,8 @@ function useApp(user, householdId) {
       const reordered = orderedIds.map(id => p.entries.find(e => e.id === id)).filter(Boolean);
       return { ...p, entries: [...others, ...reordered] };
     }), []),
-    setLimit: useCallback((k, v) => up(p => ({ ...p, limits: { ...(p.limits||{}), [k]: v } })), []),
-    removeLimit: useCallback(k => up(p => { const l = { ...(p.limits||{}) }; delete l[k]; return { ...p, limits: l }; }), []),
     addCategory: useCallback(c => up(p => ({ ...p, customCategories: [...(p.customCategories||[]), c] })), []),
     removeCategory: useCallback(id => up(p => ({ ...p, customCategories: (p.customCategories||[]).filter(c => c.id !== id) })), []),
-    setEnvelope: useCallback((nodeId, categoryId, envData) => up(p => ({
-      ...p, envelopes: { ...(p.envelopes||{}), [nodeId]: { ...((p.envelopes||{})[nodeId]||{}), [categoryId]: typeof envData === "number" ? { cap: envData } : envData } }
-    })), []),
-    removeEnvelope: useCallback((nodeId, categoryId) => up(p => {
-      const nodeEnvs = { ...((p.envelopes||{})[nodeId]||{}) }; delete nodeEnvs[categoryId];
-      const envs = { ...(p.envelopes||{}) };
-      if (Object.keys(nodeEnvs).length === 0) delete envs[nodeId]; else envs[nodeId] = nodeEnvs;
-      return { ...p, envelopes: envs };
-    }), []),
     addSavingsGoal: useCallback(g => up(p => ({ ...p, savingsGoals: [...(p.savingsGoals||[]), g] })), []),
     updateSavingsGoal: useCallback((id, u) => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).map(g => g.id === id ? { ...g, ...u } : g) })), []),
     removeSavingsGoal: useCallback(id => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).filter(g => g.id !== id) })), []),
@@ -621,70 +610,6 @@ function CategoryBreakdown({ entries }) {
   );
 }
 
-// ── Budget vs Actual (envelope caps vs real spending) ──
-function BudgetVsActual({ entries, envelopes, nodes, nodeId }) {
-  // Gather envelope caps from all child nodes (or this node)
-  const childIds = nodes.filter(n => n.parentId === nodeId).map(n => n.id);
-  const targetIds = childIds.length > 0 ? childIds : [nodeId];
-  const catTotals = {}; // { catId: { cap, actual } }
-
-  targetIds.forEach(nid => {
-    const nodeEnvs = (envelopes || {})[nid] || {};
-    for (const [catId, env] of Object.entries(nodeEnvs)) {
-      if (!env || !env.cap || env.cap <= 0) continue;
-      if (!catTotals[catId]) catTotals[catId] = { cap: 0, actual: 0 };
-      catTotals[catId].cap += env.cap;
-      const spent = entries.filter(e => e.nodeId === nid && e.category === catId && e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
-      catTotals[catId].actual += spent;
-    }
-  });
-
-  const cats = allCats();
-  const data = Object.entries(catTotals).map(([catId, v]) => {
-    const cat = cats.find(c => c.id === catId) || { id: catId, label: catId, icon: "\u{1F4CB}", color: "#f97316" };
-    return { cat: cat.label, icon: cat.icon, color: cat.color, cap: v.cap, actual: v.actual };
-  }).sort((a, b) => b.cap - a.cap);
-
-  if (data.length === 0) return null;
-  const maxVal = Math.max(...data.map(d => Math.max(d.cap, d.actual)));
-  const fmtB = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  return (
-    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
-      <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>Budget vs. Actual</div>
-      <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: "rgba(255,255,255,0.12)" }} /><span style={{ fontSize: 10, color: T().textMuted }}>Budget Cap</span></div>
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: T().accent }} /><span style={{ fontSize: 10, color: T().textMuted }}>Actual Spent</span></div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {data.map((d, i) => {
-          const capPct = (d.cap / maxVal) * 100;
-          const actPct = (d.actual / maxVal) * 100;
-          const over = d.actual > d.cap;
-          return (
-            <div key={i}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                <span style={{ fontSize: 11, color: T().text }}>{d.icon} {d.cat}</span>
-                <span style={{ fontSize: 10, fontFamily: T().mono, color: over ? T().exp : T().inc, fontWeight: 600 }}>
-                  ${fmtB(d.actual)} / ${fmtB(d.cap)}
-                  {over && <span style={{ marginLeft: 4, fontSize: 9, color: T().exp }}>OVER</span>}
-                </span>
-              </div>
-              <div style={{ position: "relative", height: 12, borderRadius: 6, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
-                <div style={{ position: "absolute", left: `${capPct}%`, top: 0, bottom: 0, width: 2, background: "rgba(255,255,255,0.25)", zIndex: 2 }} />
-                <div style={{
-                  height: "100%", borderRadius: 6, width: `${Math.min(actPct, 100)}%`,
-                  background: over ? `linear-gradient(90deg, ${T().exp}aa, ${T().exp}66)` : `linear-gradient(90deg, ${T().accent}cc, ${T().accent}55)`,
-                }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 
 
 
@@ -882,21 +807,6 @@ function DonutChart({ entries }) {
   );
 }
 
-// ── Envelope Utilities ──
-function getBarColor(pct) {
-  if (pct < 60) return T().inc;
-  if (pct < 85) return "#f59e0b";
-  return T().exp;
-}
-
-function daysLeftInMonth() {
-  const now = new Date();
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  return lastDay - now.getDate();
-}
-
-function currentDayOfMonth() { return new Date().getDate(); }
-function daysInCurrentMonth() { const n = new Date(); return new Date(n.getFullYear(), n.getMonth() + 1, 0).getDate(); }
 
 // ── Collapsible Section ──
 function Collapsible({ title, count, defaultOpen, children }) {
@@ -918,306 +828,6 @@ function Collapsible({ title, count, defaultOpen, children }) {
     </div>
   );
 }
-
-// ── Envelope Section (category-based envelopes for a budget node) ──
-function EnvelopeSection({ nodeId, envelopes, entries, nodes, setEnvelope, removeEnvelope }) {
-  const nodeEnvs = (envelopes || {})[nodeId] || {};
-  const catIds = Object.keys(nodeEnvs);
-  const cats = allCats();
-  const [adding, setAdding] = useState(false);
-  const [addCat, setAddCat] = useState("");
-  const [addCap, setAddCap] = useState("");
-  const [editingCat, setEditingCat] = useState(null);
-  const [editCap, setEditCap] = useState("");
-  const [showRollConfirm, setShowRollConfirm] = useState(false);
-  const [rollTargetId, setRollTargetId] = useState("");
-
-  // Categories that already have an envelope (include rollover in total)
-  const envRows = catIds.map(catId => {
-    const cat = cats.find(c => c.id === catId) || { id: catId, label: catId, icon: "📋", color: "#f97316" };
-    const envData = nodeEnvs[catId] || {};
-    const cap = envData.cap || 0;
-    const rollover = envData.rollover || 0;
-    const total = cap + rollover;
-    const rolled = !!envData.rolledTo;
-    const spent = entries.filter(e => e.nodeId === nodeId && e.category === catId && e.type === "expense" && e.paid !== false).reduce((s, e) => s + e.amount, 0);
-    const left = total - spent;
-    const pct = total > 0 ? Math.min((spent / total) * 100, 100) : 0;
-    return { catId, cat, cap, rollover, total, spent, left, pct, isOver: spent > total, rolled };
-  });
-
-  // Categories available to add (not already enveloped, skip income)
-  const availableCats = cats.filter(c => c.id !== "income" && !catIds.includes(c.id));
-
-  const totalBudget = envRows.reduce((s, r) => s + r.total, 0);
-  const totalSpent = envRows.reduce((s, r) => s + r.spent, 0);
-  const totalLeft = totalBudget - totalSpent;
-
-  // Find sibling budgets in the same parent folder for roll-forward target picker
-  const getSiblingBudgets = () => {
-    if (!nodes || nodes.length === 0) return [];
-    const thisNode = nodes.find(n => n.id === nodeId);
-    if (!thisNode || !thisNode.parentId) return [];
-    return nodes.filter(n => n.parentId === thisNode.parentId && n.id !== nodeId && !n.archived);
-  };
-
-  const siblingBudgets = getSiblingBudgets();
-  // Default to next sibling if no target selected yet
-  const defaultTarget = (() => {
-    const thisNode = nodes.find(n => n.id === nodeId);
-    if (!thisNode || !thisNode.parentId) return null;
-    const siblings = nodes.filter(n => n.parentId === thisNode.parentId);
-    const myIdx = siblings.findIndex(s => s.id === nodeId);
-    return myIdx >= 0 && myIdx < siblings.length - 1 ? siblings[myIdx + 1] : null;
-  })();
-  const selectedTargetId = rollTargetId || (defaultTarget ? defaultTarget.id : "");
-  const rollTarget = siblingBudgets.find(s => s.id === selectedTargetId) || null;
-
-  // Also resolve the rolled-to target for display (may differ from picker if already rolled)
-  const rolledToNode = (() => {
-    const rolledRow = envRows.find(r => r.rolled);
-    if (!rolledRow) return null;
-    const destId = (nodeEnvs[rolledRow.catId] || {}).rolledTo;
-    return destId ? nodes.find(n => n.id === destId) : null;
-  })();
-
-  const rollableRows = envRows.filter(r => r.left > 0 && !r.rolled);
-  const totalRollable = rollableRows.reduce((s, r) => s + r.left, 0);
-  const anyRolled = envRows.some(r => r.rolled);
-  const canRoll = siblingBudgets.length > 0 && rollableRows.length > 0 && !anyRolled;
-
-  const handleRollForward = () => {
-    if (!rollTarget) return;
-    for (const row of rollableRows) {
-      // Mark source as rolled
-      const srcEnv = nodeEnvs[row.catId] || {};
-      setEnvelope(nodeId, row.catId, { ...srcEnv, rolledTo: rollTarget.id, rolledAmount: row.left });
-      // Add rollover to destination — inherit cap if destination doesn't have this category
-      const destNodeEnvs = (envelopes || {})[rollTarget.id] || {};
-      const destEnv = destNodeEnvs[row.catId] || {};
-      setEnvelope(rollTarget.id, row.catId, {
-        cap: destEnv.cap || row.cap,
-        rollover: (destEnv.rollover || 0) + row.left,
-        rolloverFrom: nodeId,
-      });
-    }
-    setShowRollConfirm(false);
-  };
-
-  const handleUnroll = () => {
-    for (const row of envRows.filter(r => r.rolled)) {
-      const srcEnv = nodeEnvs[row.catId] || {};
-      const rolledAmount = srcEnv.rolledAmount || 0;
-      const destId = srcEnv.rolledTo;
-      // Remove rolled markers from source
-      const { rolledTo, rolledAmount: _ra, ...cleanSrc } = srcEnv;
-      setEnvelope(nodeId, row.catId, cleanSrc);
-      // Remove rollover from destination
-      if (destId) {
-        const destNodeEnvs = (envelopes || {})[destId] || {};
-        const destEnv = destNodeEnvs[row.catId] || {};
-        const newRollover = Math.max(0, (destEnv.rollover || 0) - rolledAmount);
-        const { rolloverFrom, ...cleanDest } = destEnv;
-        if (destEnv.cap > 0 || newRollover > 0) {
-          setEnvelope(destId, row.catId, { ...cleanDest, rollover: newRollover });
-        } else {
-          removeEnvelope(destId, row.catId);
-        }
-      }
-    }
-  };
-
-  const handleAdd = () => {
-    const v = parseFloat(addCap);
-    if (addCat && v > 0) {
-      setEnvelope(nodeId, addCat, v);
-      setAddCat(""); setAddCap(""); setAdding(false);
-    }
-  };
-
-  const handleEdit = (catId) => {
-    const v = parseFloat(editCap);
-    if (v > 0) {
-      const existing = nodeEnvs[catId] || {};
-      setEnvelope(nodeId, catId, { ...existing, cap: v });
-    }
-    setEditingCat(null); setEditCap("");
-  };
-
-  return (
-    <div style={{
-      background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
-      border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14,
-    }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: envRows.length > 0 ? 10 : 0 }}>
-        <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em" }}>
-          Envelopes
-        </div>
-        {envRows.length > 0 && (
-          <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T().mono, color: totalLeft >= 0 ? T().inc : T().exp }}>
-            {fmt(Math.abs(totalLeft))} <span style={{ fontSize: 10, fontWeight: 500, color: T().textMuted }}>{totalLeft >= 0 ? "left" : "over"}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Envelope rows */}
-      {envRows.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 10 }}>
-          {envRows.map(({ catId, cat, cap, rollover, total, spent, left, pct, isOver, rolled }) => (
-            <div key={catId} style={{ opacity: rolled ? 0.6 : 1 }}>
-              {editingCat === catId ? (
-                /* ── Inline edit mode ── */
-                <div style={{ display: "flex", gap: 6, alignItems: "center", animation: "slideIn 0.15s ease" }}>
-                  <span style={{ fontSize: 14, width: 22, textAlign: "center" }}>{cat.icon}</span>
-                  <span style={{ fontSize: 12, color: T().text, fontWeight: 500, minWidth: 50 }}>{cat.label}</span>
-                  <div style={{ position: "relative", flex: 1 }}>
-                    <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span>
-                    <input value={editCap} onChange={e => setEditCap(e.target.value.replace(/[^0-9.]/g, ""))} autoFocus inputMode="decimal"
-                      onKeyDown={e => { if (e.key === "Enter") handleEdit(catId); if (e.key === "Escape") setEditingCat(null); }}
-                      style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 6, padding: "6px 6px 6px 22px", color: T().text, fontSize: 12, fontFamily: T().mono, outline: "none" }} />
-                  </div>
-                  <button onClick={() => handleEdit(catId)} style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: T().accent, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Save</button>
-                  <button onClick={() => setEditingCat(null)} style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 11, cursor: "pointer" }}>✕</button>
-                </div>
-              ) : (
-                /* ── Display mode ── */
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 }}>{cat.icon}</span>
-                      <span style={{ fontSize: 12, color: T().text, fontWeight: 500 }}>{cat.label}</span>
-                      <span style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{fmt(spent)} / {fmt(total)}</span>
-                      {rollover > 0 && <span style={{ fontSize: 8, color: T().accentLight, fontWeight: 600, background: "rgba(99,102,241,0.1)", padding: "1px 4px", borderRadius: 3 }}>+{fmt(rollover)}</span>}
-                      {rolled && <span style={{ fontSize: 8, color: T().inc, fontWeight: 600, background: "rgba(34,197,94,0.1)", padding: "1px 4px", borderRadius: 3 }}>✓ rolled</span>}
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                      <span style={{ fontSize: 11, fontFamily: T().mono, fontWeight: 600, color: isOver ? T().exp : T().textSub }}>
-                        {isOver ? "−" : ""}{fmt(Math.abs(left))}
-                      </span>
-                      <button onClick={() => { setEditingCat(catId); setEditCap(String(cap)); }} title="Edit" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 11, padding: "2px 4px" }}>✎</button>
-                      <button onClick={() => { removeEnvelope(nodeId, catId); }} title="Delete" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}
-                        onMouseEnter={e => (e.currentTarget.style.color = T().exp)} onMouseLeave={e => (e.currentTarget.style.color = T().textDim)}>×</button>
-                    </div>
-                  </div>
-                  <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, background: rolled ? T().textDim : getBarColor(pct), borderRadius: 3, transition: "width 0.4s ease" }} />
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Roll forward button */}
-      {canRoll && !showRollConfirm && (
-        <button onClick={() => setShowRollConfirm(true)} style={{
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          width: "100%", padding: "9px 0", borderRadius: 8, marginBottom: 8,
-          border: "1px dashed rgba(34,197,94,0.3)", background: "rgba(34,197,94,0.04)",
-          color: T().inc, fontSize: 11, fontWeight: 600, cursor: "pointer",
-        }}>
-          Roll forward {fmt(totalRollable)} →
-        </button>
-      )}
-
-      {/* Roll confirm with target picker */}
-      {showRollConfirm && (
-        <div style={{
-          background: "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
-          border: `1px solid ${T().cardBorder}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8,
-          animation: "slideIn 0.2s ease",
-        }}>
-          <div style={{ fontSize: 12, color: T().text, fontWeight: 600, marginBottom: 8 }}>Roll forward to:</div>
-
-          {/* Target picker dropdown */}
-          <select value={selectedTargetId} onChange={e => setRollTargetId(e.target.value)} style={{
-            width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`,
-            borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 12, outline: "none", marginBottom: 10,
-            appearance: "auto",
-          }}>
-            <option value="">Select target budget...</option>
-            {siblingBudgets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-
-          <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 8, lineHeight: 1.5 }}>
-            {rollableRows.map(r => (
-              <div key={r.catId} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
-                <span>{r.cat.icon} {r.cat.label}</span>
-                <span style={{ fontFamily: T().mono, color: T().inc, fontWeight: 600 }}>{fmt(r.left)}</span>
-              </div>
-            ))}
-            <div style={{ borderTop: `1px solid ${T().cardBorder}`, marginTop: 4, paddingTop: 4, display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
-              <span>Total</span><span style={{ fontFamily: T().mono, color: T().inc }}>{fmt(totalRollable)}</span>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={handleRollForward} disabled={!rollTarget} style={{
-              flex: 1, padding: "9px 0", borderRadius: 8, border: "none",
-              background: rollTarget ? T().inc : "rgba(255,255,255,0.08)", color: rollTarget ? "#0a0a1a" : T().textDim,
-              fontSize: 12, fontWeight: 700, cursor: rollTarget ? "pointer" : "default", opacity: rollTarget ? 1 : 0.5,
-            }}>Roll → {rollTarget ? rollTarget.name : "..."}</button>
-            <button onClick={() => setShowRollConfirm(false)} style={{
-              padding: "9px 14px", borderRadius: 8, border: `1px solid ${T().cardBorder}`,
-              background: "transparent", color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer",
-            }}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {/* Rolled badge with undo */}
-      {anyRolled && (
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", marginBottom: 8,
-          background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 8,
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 11 }}>✓</span>
-            <span style={{ fontSize: 11, color: T().inc, fontWeight: 600 }}>Rolled forward to {rolledToNode ? rolledToNode.name : "another budget"}</span>
-          </div>
-          <button onClick={handleUnroll} style={{
-            background: "none", border: `1px solid rgba(34,197,94,0.3)`, borderRadius: 6,
-            padding: "3px 8px", color: T().inc, fontSize: 10, fontWeight: 600, cursor: "pointer",
-          }}>Undo</button>
-        </div>
-      )}
-
-      {/* Add envelope form */}
-      {adding ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, animation: "slideIn 0.15s ease", marginTop: envRows.length > 0 ? 4 : 10 }}>
-          <select value={addCat} onChange={e => setAddCat(e.target.value)} style={{
-            background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px",
-            color: T().text, fontSize: 12, outline: "none", appearance: "auto",
-          }}>
-            <option value="">Select category...</option>
-            {availableCats.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
-          </select>
-          {addCat && (
-            <div style={{ display: "flex", gap: 8 }}>
-              <div style={{ position: "relative", flex: 1 }}>
-                <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 13, fontFamily: T().mono }}>$</span>
-                <input value={addCap} onChange={e => setAddCap(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="Monthly cap" autoFocus inputMode="decimal"
-                  onKeyDown={e => { if (e.key === "Enter") handleAdd(); }}
-                  style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 8px 8px 24px", color: T().text, fontSize: 13, fontFamily: T().mono, outline: "none" }} />
-              </div>
-              <button onClick={handleAdd} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Add</button>
-              <button onClick={() => { setAdding(false); setAddCat(""); setAddCap(""); }} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 12, cursor: "pointer" }}>✕</button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <button onClick={() => setAdding(true)} style={{
-          display: "block", width: "100%", padding: "8px 0", borderRadius: 8,
-          border: `1px dashed ${T().accent}40`, background: `${T().accent}08`,
-          color: T().accentLight, fontSize: 11, fontWeight: 600, cursor: "pointer",
-          marginTop: envRows.length > 0 ? 0 : 10,
-        }}>+ Add Envelope</button>
-      )}
-    </div>
-  );
-}
-
 
 // ── Savings Goals ──
 function SavingsGoals({ goals = [], addGoal, updateGoal, removeGoal }) {
@@ -1462,7 +1072,7 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount,
 
   return (
     <div style={{ marginBottom: 16 }}>
-      
+
       {/* Filtered view header */}
       {filteredAccountId && (() => {
         const fa = accounts.find(a => a.id === filteredAccountId);
@@ -1575,7 +1185,7 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount,
 // NODE PAGE
 // ══════════════════════════════════════════════════
 
-function NodePage({ node, parentName, nodes, entries, customCategories, envelopes, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, setEnvelope, removeEnvelope, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, allBankAccounts, setBankAccountsForNode, addBankAccountToNode, updateBankAccountInNode, removeBankAccountFromNode, addEntries, markAllPaid, markAllUnpaid }) {
+function NodePage({ node, parentName, nodes, entries, customCategories, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, allBankAccounts, setBankAccountsForNode, addBankAccountToNode, updateBankAccountInNode, removeBankAccountFromNode, addEntries, markAllPaid, markAllUnpaid }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1590,7 +1200,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
   const [bulkAccountId, setBulkAccountId] = useState("");
   const fileRef = useRef(null);
 
-  const toggleSelect = (id) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s; });
+  const toggleSelect = (id) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); if (s.size === 0) { setSelectMode(false); setBulkAction(null); } return s; });
   const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setBulkAction(null); };
 
   const allChildren = nodes.filter(n => n.parentId === node.id);
@@ -1645,7 +1255,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
     });
   };
 
-  // Copy budget: duplicate entire sub-tree — nodes, envelopes, and all entries (paid reset to false)
+  // Copy budget: duplicate entire sub-tree — nodes and all entries (paid reset to false)
   const handleCopyBudget = (name) => {
     if (!copyingFrom || !name.trim()) { setCopyingFrom(null); return; }
     const srcNode = nodes.find(n => n.id === copyingFrom);
@@ -1663,16 +1273,6 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
     for (const oldId of descIds) {
       const srcChild = nodes.find(n => n.id === oldId);
       if (srcChild) addNode({ ...srcChild, id: idMap[oldId], parentId: idMap[srcChild.parentId] || rootNewId });
-    }
-
-    // Copy envelopes for source node + all descendants
-    for (const oldId of [copyingFrom, ...descIds]) {
-      const srcEnvs = (envelopes || {})[oldId] || {};
-      for (const [catId, env] of Object.entries(srcEnvs)) {
-        if (env && env.cap > 0) {
-          setEnvelope(idMap[oldId], catId, { cap: env.cap });
-        }
-      }
     }
 
     // Copy all entries from source + all descendants, assign new IDs, remap nodeId, reset paid
@@ -1695,7 +1295,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
     haptic();
   };
 
-  // All folders use the traditional folder view — envelopes live on leaf nodes (the monthly budgets)
+  // All folders use the traditional folder view
 
   // All descendant entries for folder-level analytics
   const allDescEntries = getAllDescendantEntries(nodes, entries, node.id);
@@ -1720,19 +1320,6 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
           )}
         </div>
 
-        {!isFolderMode && (
-          <>
-            {/* Envelope section — category-based envelopes with progress bars */}
-            <EnvelopeSection
-              nodeId={node.id}
-              envelopes={envelopes}
-              entries={entries}
-              nodes={nodes}
-              setEnvelope={setEnvelope}
-              removeEnvelope={removeEnvelope}
-            />
-          </>
-        )}
       </div>
 
       <div style={{ padding: "0 20px 120px" }}>
@@ -1742,7 +1329,6 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
             {displayPrefs.monthlyTrends && <MonthlyTrends entries={allDescEntries} />}
             {displayPrefs.yearInReview && <YearInReview entries={allDescEntries} />}
             {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
-            {displayPrefs.budgetVsActual && <BudgetVsActual entries={entries} envelopes={envelopes} nodes={nodes} nodeId={node.id} />}
 
             <SavingsGoals goals={savingsGoals} addGoal={addSavingsGoal} updateGoal={updateSavingsGoal} removeGoal={removeSavingsGoal} />
 
@@ -1768,7 +1354,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, envelope
               <div style={{ marginTop: 8, animation: "slideIn 0.2s ease" }}>
                 <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 6 }}>
                   Copying from: <strong style={{ color: T().text }}>{nodes.find(n => n.id === copyingFrom)?.name || "Budget"}</strong>
-                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(envelopes + all transactions, paid status reset)</span>
+                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(all transactions, paid status reset)</span>
                 </div>
                 <InlineNew placeholder="New budget name (e.g. May 2026)" accentColor={color} icon={<div style={{ width: 8 }} />}
                   onCommit={name => handleCopyBudget(name)} onCancel={() => setCopyingFrom(null)} />
@@ -1983,6 +1569,7 @@ export default function App({ user, householdId }) {
   const [addingRoot, setAddingRoot] = useState(false);
   const [showArchivedRoot, setShowArchivedRoot] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [activeTab, setActiveTab] = useState("home");
   const [themeId, setThemeId] = useState(() => { try { return localStorage.getItem("maverick-theme") || "midnight"; } catch { return "midnight"; } });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => typeof Notification !== "undefined" && Notification.permission === "granted");
   const [notifPrefs, setNotifPrefs] = useState({ ...DEFAULT_NOTIFICATION_PREFS });
@@ -2026,134 +1613,143 @@ export default function App({ user, householdId }) {
     const roots = showArchivedRoot ? allRoots : allRoots.filter(n => !n.archived);
     const archivedRootCount = allRoots.filter(n => n.archived).length;
     const stats = roots.map(f => ({ ...f, ...getNodeBalance(d.nodes, d.entries, f.id), childCount: d.nodes.filter(n => n.parentId === f.id).length }));
-    return shell(
-      <div style={{ padding: "24px 20px 20px", animation: "fadeIn 0.4s ease" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-          <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: "-0.02em", background: t.titleGrad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Maverick</h1>
-            <span style={{ fontSize: 10, color: t.textDim, textTransform: "uppercase", letterSpacing: "0.15em", fontWeight: 600 }}>Budget</span>
-          </div>
-          <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? `${t.accent}20` : t.surface, border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10, width: 36, height: 36, cursor: "pointer", fontSize: 18, color: showSettings ? t.accentLight : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>⚙</button>
-        </div>
-        {showSettings && (
-          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14, padding: "16px 18px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
-            <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Settings</div>
-            
-            {/* Theme */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 16 }}>{themeId === "midnight" ? "🌙" : "🌊"}</span>
-                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Theme</div><div style={{ fontSize: 10, color: t.textMuted }}>{t.name}</div></div>
-              </div>
-              <button onClick={toggleTheme} style={{ background: `${t.accent}20`, border: `1px solid ${t.accent}30`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.accentLight }}>
-                Switch to {themeId === "midnight" ? "Ocean" : "Midnight"}
-              </button>
-            </div>
 
-            {/* Notifications master toggle */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 16 }}>🔔</span>
-                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Notifications</div><div style={{ fontSize: 10, color: t.textMuted }}>{notificationsEnabled ? "Enabled" : "Disabled"}</div></div>
+    // Dashboard helpers
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    const displayName = user.displayName || user.email?.split("@")[0] || "there";
+    const totalBalance = allRoots.filter(n => !n.archived).reduce((sum, f) => sum + getNodeBalance(d.nodes, d.entries, f.id).balance, 0);
+
+    // Recent transactions — last 5 across all folders
+    const recentEntries = [...d.entries].sort((a, b) => (b.dateISO || "").localeCompare(a.dateISO || "")).slice(0, 5).map(entry => {
+      const node = d.nodes.find(n => n.id === entry.nodeId);
+      const folder = node?.parentId ? d.nodes.find(n => n.id === node.parentId) : node;
+      const cat = allCats().find(c => c.id === entry.category);
+      return { ...entry, folder, cat };
+    });
+
+    // Settings panel (shared across tabs)
+    const settingsPanel = showSettings && (
+      <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14, padding: "16px 18px", marginBottom: 16, animation: "slideIn 0.2s ease" }}>
+        <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Settings</div>
+
+        {/* Theme */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>{themeId === "midnight" ? "🌙" : "🌊"}</span>
+            <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Theme</div><div style={{ fontSize: 10, color: t.textMuted }}>{t.name}</div></div>
+          </div>
+          <button onClick={toggleTheme} style={{ background: `${t.accent}20`, border: `1px solid ${t.accent}30`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: t.accentLight }}>
+            Switch to {themeId === "midnight" ? "Ocean" : "Midnight"}
+          </button>
+        </div>
+
+        {/* Notifications master toggle */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🔔</span>
+            <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Notifications</div><div style={{ fontSize: 10, color: t.textMuted }}>{notificationsEnabled ? "Enabled" : "Disabled"}</div></div>
+          </div>
+          <button onClick={async () => {
+            if (typeof Notification === "undefined") return;
+            if (Notification.permission === "granted") {
+              if (notificationsEnabled) {
+                try { await deleteDoc(doc(db, "users", user.uid, "tokens", "fcm")); } catch (e) { console.error("Token remove error:", e); }
+                setNotificationsEnabled(false);
+              } else {
+                const token = await requestNotificationPermission(user.uid, householdId);
+                setNotificationsEnabled(!!token);
+              }
+            } else {
+              const token = await requestNotificationPermission(user.uid, householdId);
+              setNotificationsEnabled(!!token);
+            }
+          }} style={{
+            width: 44, height: 26, borderRadius: 13, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
+            background: notificationsEnabled ? t.inc : "rgba(255,255,255,0.1)",
+          }}>
+            <div style={{
+              width: 20, height: 20, borderRadius: 10, background: "#fff", position: "absolute", top: 3, transition: "left 0.2s",
+              left: notificationsEnabled ? 21 : 3,
+            }} />
+          </button>
+        </div>
+        {/* Notification preferences */}
+        {notificationsEnabled && notifPrefsLoaded && (
+          <div style={{ marginLeft: 32, marginBottom: 12 }}>
+            {[
+              { key: "newTransaction", label: "New transactions", sub: "When someone posts a new entry" },
+              { key: "editTransaction", label: "Edited transactions", sub: "When someone edits an entry" },
+              { key: "deleteTransaction", label: "Deleted transactions", sub: "When someone removes an entry" },
+              { key: "budgetUpdate", label: "Budget changes", sub: "Folders or categories" },
+            ].map(({ key, label, sub }) => (
+              <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
+                <div><div style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{label}</div><div style={{ fontSize: 9, color: t.textMuted }}>{sub}</div></div>
+                <button onClick={() => toggleNotifPref(key)} style={{
+                  width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
+                  background: notifPrefs[key] ? t.inc : "rgba(255,255,255,0.1)",
+                }}>
+                  <div style={{
+                    width: 16, height: 16, borderRadius: 8, background: "#fff", position: "absolute", top: 2, transition: "left 0.2s",
+                    left: notifPrefs[key] ? 18 : 2,
+                  }} />
+                </button>
               </div>
-              <button onClick={async () => {
-                if (typeof Notification === "undefined") return;
-                if (Notification.permission === "granted") {
-                  if (notificationsEnabled) {
-                    try { await deleteDoc(doc(db, "users", user.uid, "tokens", "fcm")); } catch (e) { console.error("Token remove error:", e); }
-                    setNotificationsEnabled(false);
-                  } else {
-                    const token = await requestNotificationPermission(user.uid, householdId);
-                    setNotificationsEnabled(!!token);
-                  }
-                } else {
-                  const token = await requestNotificationPermission(user.uid, householdId);
-                  setNotificationsEnabled(!!token);
-                }
-              }} style={{
-                width: 44, height: 26, borderRadius: 13, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
-                background: notificationsEnabled ? t.inc : "rgba(255,255,255,0.1)",
+            ))}
+          </div>
+        )}
+
+        {/* Display Preferences */}
+        <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: 16 }}>📊</span>
+            <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Folder Charts</div><div style={{ fontSize: 10, color: t.textMuted }}>Per-user — won't affect your partner</div></div>
+          </div>
+          {displayPrefsLoaded && [
+            { key: "monthlyTrends", label: "Monthly Trends", sub: "Income vs expenses bar chart" },
+            { key: "yearInReview", label: "Year in Review", sub: "Cumulative savings sparkline" },
+            { key: "categoryBreakdown", label: "Category Breakdown", sub: "Expense donut chart" },
+          ].map(({ key, label, sub }) => (
+            <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", marginLeft: 32 }}>
+              <div><div style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{label}</div><div style={{ fontSize: 9, color: t.textMuted }}>{sub}</div></div>
+              <button onClick={() => toggleDisplayPref(key)} style={{
+                width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
+                background: displayPrefs[key] ? t.accent : "rgba(255,255,255,0.1)",
               }}>
                 <div style={{
-                  width: 20, height: 20, borderRadius: 10, background: "#fff", position: "absolute", top: 3, transition: "left 0.2s",
-                  left: notificationsEnabled ? 21 : 3,
+                  width: 16, height: 16, borderRadius: 8, background: "#fff", position: "absolute", top: 2, transition: "left 0.2s",
+                  left: displayPrefs[key] ? 18 : 2,
                 }} />
               </button>
             </div>
-            {/* Notification preferences — only show when notifications are enabled */}
-            {notificationsEnabled && notifPrefsLoaded && (
-              <div style={{ marginLeft: 32, marginBottom: 12 }}>
-                {[
-                  { key: "newTransaction", label: "New transactions", sub: "When someone posts a new entry" },
-                  { key: "editTransaction", label: "Edited transactions", sub: "When someone edits an entry" },
-                  { key: "deleteTransaction", label: "Deleted transactions", sub: "When someone removes an entry" },
-                  { key: "budgetUpdate", label: "Budget changes", sub: "Folders, limits, or categories" },
-                  { key: "envelopeAlert", label: "Envelope alerts", sub: "When an envelope hits 80% or 100%" },
-                ].map(({ key, label, sub }) => (
-                  <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
-                    <div><div style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{label}</div><div style={{ fontSize: 9, color: t.textMuted }}>{sub}</div></div>
-                    <button onClick={() => toggleNotifPref(key)} style={{
-                      width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
-                      background: notifPrefs[key] ? t.inc : "rgba(255,255,255,0.1)",
-                    }}>
-                      <div style={{
-                        width: 16, height: 16, borderRadius: 8, background: "#fff", position: "absolute", top: 2, transition: "left 0.2s",
-                        left: notifPrefs[key] ? 18 : 2,
-                      }} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+          ))}
+        </div>
 
-            {/* Display Preferences */}
-            <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4, marginBottom: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <span style={{ fontSize: 16 }}>📊</span>
-                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Folder Charts</div><div style={{ fontSize: 10, color: t.textMuted }}>Per-user — won't affect your partner</div></div>
-              </div>
-              {displayPrefsLoaded && [
-                { key: "monthlyTrends", label: "Monthly Trends", sub: "Income vs expenses bar chart" },
-                { key: "yearInReview", label: "Year in Review", sub: "Cumulative savings sparkline" },
-                { key: "categoryBreakdown", label: "Category Breakdown", sub: "Expense donut chart" },
-                { key: "budgetVsActual", label: "Budget vs. Actual", sub: "Envelope caps vs real spending" },
-              ].map(({ key, label, sub }) => (
-                <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", marginLeft: 32 }}>
-                  <div><div style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{label}</div><div style={{ fontSize: 9, color: t.textMuted }}>{sub}</div></div>
-                  <button onClick={() => toggleDisplayPref(key)} style={{
-                    width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
-                    background: displayPrefs[key] ? t.accent : "rgba(255,255,255,0.1)",
-                  }}>
-                    <div style={{
-                      width: 16, height: 16, borderRadius: 8, background: "#fff", position: "absolute", top: 2, transition: "left 0.2s",
-                      left: displayPrefs[key] ? 18 : 2,
-                    }} />
-                  </button>
-                </div>
-              ))}
-            </div>
+        {/* Custom Categories */}
+        <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
+          <CategoryManager customCategories={d.customCategories || []} onAdd={app.addCategory} onRemove={app.removeCategory} />
+        </div>
 
-            {/* Custom Categories */}
-            <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
-              <CategoryManager customCategories={d.customCategories || []} onAdd={app.addCategory} onRemove={app.removeCategory} />
-            </div>
-
-            {/* Household code */}
-            <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <span style={{ fontSize: 16 }}>👥</span>
-                <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Household</div><div style={{ fontSize: 10, color: t.textMuted }}>Invite your partner</div></div>
-              </div>
-              <div style={{ background: `${t.accent}10`, borderRadius: 8, padding: "8px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 18, fontWeight: 700, fontFamily: T().mono, color: t.text, letterSpacing: "0.12em" }}>{householdId}</span>
-                <span style={{ fontSize: 10, color: t.textMuted }}>{user?.email}</span>
-              </div>
-            </div>
-
-            {/* Sign out */}
-            <button onClick={() => { if (confirm("Sign out?")) signOut(auth); }} style={{ marginTop: 12, width: "100%", padding: "10px 0", borderRadius: 8, border: `1px solid rgba(239,68,68,0.2)`, background: "rgba(239,68,68,0.06)", color: "#ef4444", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Sign Out</button>
+        {/* Household code */}
+        <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 16 }}>👥</span>
+            <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Household</div><div style={{ fontSize: 10, color: t.textMuted }}>Invite your partner</div></div>
           </div>
-        )}
+          <div style={{ background: `${t.accent}10`, borderRadius: 8, padding: "8px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 18, fontWeight: 700, fontFamily: T().mono, color: t.text, letterSpacing: "0.12em" }}>{householdId}</span>
+            <span style={{ fontSize: 10, color: t.textMuted }}>{user?.email}</span>
+          </div>
+        </div>
+
+        {/* Sign out */}
+        <button onClick={() => { if (confirm("Sign out?")) signOut(auth); }} style={{ marginTop: 12, width: "100%", padding: "10px 0", borderRadius: 8, border: `1px solid rgba(239,68,68,0.2)`, background: "rgba(239,68,68,0.06)", color: "#ef4444", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Sign Out</button>
+      </div>
+    );
+
+    // Folder list (shared between home and budgets tab)
+    const folderList = (
+      <>
         <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Folders ({roots.length})</div>
         <div style={{ paddingBottom: 100 }}>
           <DraggableList items={stats} onReorder={ids => app.reorderNodes(null, ids)} renderItem={(f, _i, onDragHandle) => (
@@ -2175,15 +1771,253 @@ export default function App({ user, householdId }) {
           {!addingRoot && roots.length === 0 && <EmptyState text="No folders yet" sub="Tap below to create one" />}
         </div>
         <BottomBar><Btn onClick={() => setAddingRoot(true)} bg={`${T().accent}25`} color={T().accentLight}>+ New Folder</Btn></BottomBar>
+      </>
+    );
+
+    // Bottom navigation bar
+    const bottomNav = (
+      <div style={{
+        position: "sticky", bottom: 0, left: 0, right: 0,
+        background: t.card, borderTop: `1px solid ${t.cardBorder}`,
+        display: "flex", justifyContent: "space-around", alignItems: "center",
+        padding: "8px 0 calc(8px + env(safe-area-inset-bottom, 0px))",
+        zIndex: 100,
+      }}>
+        {[
+          { id: "home", icon: "🏠", label: "Home" },
+          { id: "budgets", icon: "📂", label: "Budgets" },
+          { id: "accounts", icon: "🏦", label: "Accounts" },
+          { id: "settings", icon: "⚙️", label: "Settings" },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => {
+            haptic();
+            if (tab.id === "settings") { setShowSettings(!showSettings); setActiveTab("home"); }
+            else { setShowSettings(false); setActiveTab(tab.id); }
+          }} style={{
+            background: "none", border: "none", cursor: "pointer",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+            color: activeTab === tab.id || (tab.id === "settings" && showSettings) ? t.accent : t.textMuted,
+            fontSize: 20, padding: "4px 12px", transition: "color 0.2s",
+          }}>
+            <span>{tab.icon}</span>
+            <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.04em" }}>{tab.label}</span>
+          </button>
+        ))}
+      </div>
+    );
+
+    // Tab content: Budgets
+    if (activeTab === "budgets") {
+      return shell(
+        <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text }}>Budgets</h1>
+            <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? `${t.accent}20` : t.surface, border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10, width: 36, height: 36, cursor: "pointer", fontSize: 18, color: showSettings ? t.accentLight : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>⚙</button>
+          </div>
+          {settingsPanel}
+          {folderList}
+          <div style={{ height: 56 }} />
+          {bottomNav}
+        </div>
+      );
+    }
+
+    // Tab content: Accounts (placeholder)
+    if (activeTab === "accounts") {
+      return shell(
+        <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text }}>Accounts</h1>
+          </div>
+          {settingsPanel}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 20px" }}>
+            <span style={{ fontSize: 48, marginBottom: 16 }}>🏦</span>
+            <div style={{ fontSize: 16, fontWeight: 600, color: t.text, marginBottom: 6 }}>Coming Soon</div>
+            <div style={{ fontSize: 12, color: t.textMuted, textAlign: "center" }}>Bank account tracking and reconciliation will appear here.</div>
+          </div>
+          {bottomNav}
+        </div>
+      );
+    }
+
+    // Tab content: Home (default dashboard)
+    return shell(
+      <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, position: "relative" }}>
+          <h1 style={{ fontSize: 18, fontWeight: 800, margin: 0, letterSpacing: "0.18em", textTransform: "uppercase", color: t.accent }}>MAVERICK</h1>
+          <button onClick={() => { setShowSettings(!showSettings); haptic(); }} style={{
+            position: "absolute", right: 0, background: showSettings ? `${t.accent}20` : t.surface,
+            border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10,
+            width: 36, height: 36, cursor: "pointer", fontSize: 18,
+            color: showSettings ? t.accentLight : t.textSub,
+            display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s",
+          }}>⚙</button>
+        </div>
+
+        {/* Settings panel */}
+        {settingsPanel}
+
+        {/* Greeting section */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 14, color: t.textMuted, fontWeight: 400, marginBottom: 2 }}>{greeting},</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: t.text, marginBottom: 12 }}>{displayName}</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <div style={{ fontSize: 11, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>Total Balance</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+            <span style={{ fontSize: 32, fontWeight: 700, color: t.text }}><AnimatedCurrency value={totalBalance} /></span>
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 20,
+              background: totalBalance >= 0 ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
+              color: totalBalance >= 0 ? "#22c55e" : "#ef4444",
+            }}>{totalBalance >= 0 ? "+" : ""}{roots.length > 0 ? Math.round((totalBalance / Math.max(1, stats.reduce((s, f) => s + f.income, 0))) * 100) : 0}%</span>
+          </div>
+        </div>
+
+        {/* Hero banner grid — 2x2 */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
+          {/* Budgets card */}
+          <div onClick={() => { setActiveTab("budgets"); haptic(); }} style={{
+            background: "linear-gradient(135deg, #172554, #1e3a5f)", borderRadius: 16,
+            padding: 16, cursor: "pointer", transition: "transform 0.15s", position: "relative", overflow: "hidden", minHeight: 120,
+            display: "flex", flexDirection: "column", justifyContent: "space-between",
+          }} onMouseEnter={e => e.currentTarget.style.transform = "scale(1.02)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+            <div>
+              <span style={{ fontSize: 24 }}>📂</span>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Budgets</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>{roots.filter(r => !r.archived).length} folder{roots.filter(r => !r.archived).length !== 1 ? "s" : ""}</div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>{fmt(totalBalance)}</div>
+            </div>
+          </div>
+
+          {/* Net Worth card */}
+          <div style={{
+            background: "linear-gradient(135deg, #1c1917, #44403c)", borderRadius: 16,
+            padding: 16, position: "relative", overflow: "hidden", minHeight: 120, opacity: 0.75,
+            display: "flex", flexDirection: "column", justifyContent: "space-between",
+          }}>
+            <div>
+              <span style={{ fontSize: 24 }}>📊</span>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Net Worth</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>$--</div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>Coming soon</div>
+            </div>
+          </div>
+
+          {/* Paycheck card */}
+          <div style={{
+            background: "linear-gradient(135deg, #1e1b4b, #312e81)", borderRadius: 16,
+            padding: 16, position: "relative", overflow: "hidden", minHeight: 120, opacity: 0.75,
+            display: "flex", flexDirection: "column", justifyContent: "space-between",
+          }}>
+            <div>
+              <span style={{ fontSize: 24 }}>💵</span>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Paycheck</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>Calculator</div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>Coming soon</div>
+            </div>
+          </div>
+
+          {/* AI Advisor card */}
+          <div style={{
+            background: "linear-gradient(135deg, #042f2e, #065f46)", borderRadius: 16,
+            padding: 16, position: "relative", overflow: "hidden", minHeight: 120, opacity: 0.75,
+            display: "flex", flexDirection: "column", justifyContent: "space-between",
+          }}>
+            <div>
+              <span style={{ fontSize: 24 }}>🤖</span>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>AI Advisor</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>--</div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>Coming soon</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick actions bar */}
+        <div style={{
+          background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14,
+          padding: "12px 8px", marginBottom: 24, display: "flex", justifyContent: "space-around", alignItems: "center",
+        }}>
+          {[
+            { icon: "➕", label: "Add", action: () => { setActiveTab("budgets"); haptic(); } },
+            { icon: "🔄", label: "Transfer", action: () => { haptic(); } },
+            { icon: "📥", label: "Import", action: () => { haptic(); } },
+            { icon: "⚙️", label: "Settings", action: () => { setShowSettings(!showSettings); haptic(); } },
+          ].map((qa, i) => (
+            <button key={i} onClick={qa.action} style={{
+              background: `${t.accent}10`, border: `1px solid ${t.accent}15`, borderRadius: 12,
+              width: 64, height: 56, cursor: "pointer",
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4,
+              color: t.textSub, transition: "all 0.15s",
+            }} onMouseEnter={e => { e.currentTarget.style.background = `${t.accent}20`; }} onMouseLeave={e => { e.currentTarget.style.background = `${t.accent}10`; }}>
+              <span style={{ fontSize: 18 }}>{qa.icon}</span>
+              <span style={{ fontSize: 9, fontWeight: 600, color: t.textMuted }}>{qa.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Recent activity */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Recent Activity</div>
+          {recentEntries.length === 0 && (
+            <div style={{ textAlign: "center", padding: "24px 0", color: t.textMuted, fontSize: 12 }}>No transactions yet</div>
+          )}
+          {recentEntries.map((entry, i) => (
+            <div key={entry.id || i} onClick={() => { if (entry.folder) { goTo(entry.folder.id); haptic(); } }}
+              style={{
+                display: "flex", alignItems: "center", gap: 12, padding: "10px 12px",
+                background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 6,
+                cursor: entry.folder ? "pointer" : "default", transition: "background 0.15s",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+              onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
+              <div style={{
+                width: 36, height: 36, borderRadius: 10,
+                background: entry.cat ? `${entry.cat.color}20` : "rgba(255,255,255,0.05)",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16,
+              }}>
+                {entry.cat ? entry.cat.icon : "📋"}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
+                <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>
+                  {entry.cat ? entry.cat.label : "Other"}{entry.folder ? ` · ${entry.folder.name}` : ""}{entry.dateISO ? ` · ${fmtDate(entry.dateISO)}` : ""}
+                </div>
+              </div>
+              <div style={{
+                fontSize: 14, fontWeight: 600, flexShrink: 0,
+                color: entry.type === "income" ? t.inc : t.exp,
+              }}>
+                {entry.type === "income" ? "+" : "-"}{fmt(Math.abs(entry.amount || 0))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Spacer for bottom nav */}
+        <div style={{ flex: 1 }} />
+
+        {/* Bottom navigation */}
+        {bottomNav}
       </div>
     );
   }
 
   return shell(
-    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} customCategories={d.customCategories} envelopes={d.envelopes} displayPrefs={displayPrefs}
+    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} customCategories={d.customCategories} displayPrefs={displayPrefs}
       onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
-      addCategory={app.addCategory} removeCategory={app.removeCategory} setEnvelope={app.setEnvelope} removeEnvelope={app.removeEnvelope} getDesc={app.getDesc}
+      addCategory={app.addCategory} removeCategory={app.removeCategory} getDesc={app.getDesc}
       savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
       allBankAccounts={d.bankAccounts} setBankAccountsForNode={app.setBankAccountsForNode} addBankAccountToNode={app.addBankAccount} updateBankAccountInNode={app.updateBankAccount} removeBankAccountFromNode={app.removeBankAccountFromNode}
       addEntries={app.addEntries} markAllPaid={app.markAllPaid} markAllUnpaid={app.markAllUnpaid} />
