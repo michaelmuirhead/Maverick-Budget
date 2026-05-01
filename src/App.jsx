@@ -279,10 +279,14 @@ function useApp(user, householdId) {
 
 // ── Bank Account Types ──
 const ACCOUNT_TYPES = [
-  { id: "checking", label: "Checking", icon: "🏦", color: "#6366f1" },
-  { id: "savings", label: "Savings", icon: "🐖", color: "#22c55e" },
-  { id: "credit", label: "Credit Card", icon: "💳", color: "#ef4444" },
+  { id: "checking", label: "Checking", icon: "🏦", color: "#6366f1", group: "asset" },
+  { id: "savings", label: "Savings", icon: "🐖", color: "#22c55e", group: "asset" },
+  { id: "investment", label: "Investment", icon: "📈", color: "#8b5cf6", group: "asset" },
+  { id: "property", label: "Property", icon: "🏠", color: "#f59e0b", group: "asset" },
+  { id: "credit", label: "Credit Card", icon: "💳", color: "#ef4444", group: "liability" },
+  { id: "loan", label: "Loan", icon: "📋", color: "#b91c1c", group: "liability" },
 ];
+const LIABILITY_TYPES = new Set(ACCOUNT_TYPES.filter(t => t.group === "liability").map(t => t.id));
 
 function getNodeBalance(nodes, entries, nid) {
   const d = entries.filter(e => e.nodeId === nid);
@@ -302,7 +306,7 @@ function getAllDescendantEntries(nodes, entries, nid) {
 // ── Shared UI ──
 function FolderSvg({ color = "#f59e0b", size = 20 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>); }
 function FolderPlusSvg({ color = "#94a3b8", size = 20 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></svg>); }
-function BottomBar({ children }) { return (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, padding: "12px 20px 20px", background: `linear-gradient(to top, ${T().bg.includes("#0a0a1a") ? "#0a0a1a" : "#021a1a"} 60%, transparent)`, display: "flex", gap: 10, zIndex: 10 }}>{children}</div>); }
+function BottomBar({ children }) { return (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 390, padding: "12px 20px calc(20px + env(safe-area-inset-bottom, 0px))", background: `linear-gradient(to top, ${T().bg.includes("#0a0a1a") ? "#0a0a1a" : "#021a1a"} 60%, transparent)`, display: "flex", gap: 10, zIndex: 10 }}>{children}</div>); }
 function Btn({ onClick, bg, color, children }) { return (<button onClick={onClick} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", background: bg, color, transition: "all 0.2s" }}>{children}</button>); }
 function EmptyState({ text, sub }) { return (<div style={{ textAlign: "center", padding: "40px 0", color: "#334155" }}><div style={{ fontSize: 32, marginBottom: 8 }}>◇</div><div style={{ fontSize: 13 }}>{text}</div>{sub && <div style={{ fontSize: 11, marginTop: 4, color: "#1e293b" }}>{sub}</div>}</div>); }
 function AnimNum({ value }) { const [d, sD] = useState(value); const r = useRef(); useEffect(() => { const s = d, e = value; if (s === e) return; const t0 = performance.now(); function tk(n) { const t = Math.min((n - t0) / 400, 1); sD(s + (e - s) * (1 - Math.pow(1 - t, 3))); if (t < 1) r.current = requestAnimationFrame(tk); } r.current = requestAnimationFrame(tk); return () => cancelAnimationFrame(r.current); }, [value]); return (<span>{fmt(d)}</span>); }
@@ -430,8 +434,8 @@ function DraggableList({ items, renderItem, onReorder }) {
 // ── Scroll Container ──
 function ScrollContainer({ children }) {
   return (
-    <div style={{
-      height: "100vh", overflowY: "auto",
+    <div className="scroll-container" style={{
+      height: "100vh", height: "-webkit-fill-available", overflowY: "auto", overflowX: "hidden",
       WebkitOverflowScrolling: "touch", overscrollBehavior: "none",
     }}>
       {children}
@@ -992,8 +996,8 @@ function BankAccountCard({ acct, onUpdate, onRemove, onSelect, isSelected }) {
 
   const typeInfo = ACCOUNT_TYPES.find(t => t.id === acct.type) || ACCOUNT_TYPES[0];
   const bal = acct.balance || 0;
-  const isCredit = acct.type === "credit";
-  const displayBal = isCredit ? -Math.abs(bal) : bal;
+  const isLiability = LIABILITY_TYPES.has(acct.type);
+  const displayBal = isLiability ? -Math.abs(bal) : bal;
   const inputStyle = { background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "4px 8px", outline: "none", fontSize: 14, fontFamily: T().mono };
 
   const saveName = () => { const v = nameRef.current?.value?.trim(); if (v) onUpdate(acct.id, { name: v }); setEditingName(false); haptic(); };
@@ -1048,7 +1052,7 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount,
 
   const totalBalance = accounts.reduce((sum, a) => {
     const bal = a.balance || 0;
-    return sum + (a.type === "credit" ? -Math.abs(bal) : bal);
+    return sum + (LIABILITY_TYPES.has(a.type) ? -Math.abs(bal) : bal);
   }, 0);
 
   // Group by type
@@ -1151,10 +1155,10 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount,
           <div style={{ fontSize: 13, color: T().text, fontWeight: 600, marginBottom: 10 }}>🏦 New Account</div>
           <input value={formName} onChange={e => setFormName(e.target.value)} placeholder="Account name (e.g. Chase Checking)"
             style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 14, marginBottom: 8, outline: "none" }} />
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
             {ACCOUNT_TYPES.map(at => (
               <button key={at.id} onClick={() => setFormType(at.id)}
-                style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: formType === at.id ? `2px solid ${at.color}` : `1px solid ${T().inputBorder}`, background: formType === at.id ? `${at.color}20` : T().inputBg, color: formType === at.id ? at.color : T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" }}>
+                style={{ padding: "7px 4px", borderRadius: 8, border: formType === at.id ? `2px solid ${at.color}` : `1px solid ${T().inputBorder}`, background: formType === at.id ? `${at.color}20` : T().inputBg, color: formType === at.id ? at.color : T().textSub, fontSize: 11, fontWeight: 600, cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {at.icon} {at.label}
               </button>
             ))}
@@ -1570,6 +1574,14 @@ export default function App({ user, householdId }) {
   const [showArchivedRoot, setShowArchivedRoot] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState("home");
+  const [showNetWorth, setShowNetWorth] = useState(false);
+  const [showAdvisor, setShowAdvisor] = useState(false);
+  const [advisorMessages, setAdvisorMessages] = useState([]);
+  const [advisorInput, setAdvisorInput] = useState("");
+  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [nwItems, setNwItems] = useState(() => { try { const s = localStorage.getItem("maverick-nw-items"); return s ? JSON.parse(s) : []; } catch { return []; } });
+  const [addingNwItem, setAddingNwItem] = useState(null); // "asset" | "liability" | null
+  const [editingNwItem, setEditingNwItem] = useState(null);
   const [themeId, setThemeId] = useState(() => { try { return localStorage.getItem("maverick-theme") || "midnight"; } catch { return "midnight"; } });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => typeof Notification !== "undefined" && Notification.permission === "granted");
   const [notifPrefs, setNotifPrefs] = useState({ ...DEFAULT_NOTIFICATION_PREFS });
@@ -1587,11 +1599,43 @@ export default function App({ user, householdId }) {
   const par = navStack.length >= 2 ? d.nodes.find(n => n.id === navStack[navStack.length - 2]) : null;
   const goTo = nid => setNavStack([...navStack, nid]);
   const goBack = () => setNavStack(navStack.slice(0, -1));
+  const goHome = () => { setNavStack([]); setActiveTab("home"); setShowNetWorth(false); setShowAdvisor(false); };
+
+  // Persist net worth items
+  useEffect(() => { try { localStorage.setItem("maverick-nw-items", JSON.stringify(nwItems)); } catch {} }, [nwItems]);
+  const addNwItem = (item) => setNwItems(prev => [...prev, { id: uid(), ...item, createdAt: new Date().toISOString() }]);
+  const updateNwItem = (id, updates) => setNwItems(prev => prev.map(i => i.id === id ? { ...i, ...updates } : i));
+  const removeNwItem = (id) => setNwItems(prev => prev.filter(i => i.id !== id));
+
+  // ── Net Worth helpers ──
+  const getAllBankAccounts = () => {
+    const all = [];
+    const ba = d.bankAccounts || {};
+    for (const nodeId of Object.keys(ba)) {
+      for (const acct of (ba[nodeId] || [])) {
+        const node = d.nodes.find(n => n.id === nodeId);
+        all.push({ ...acct, _nodeId: nodeId, _nodeName: node?.name || "Unknown" });
+      }
+    }
+    return all;
+  };
+  const calcNetWorth = (accounts) => {
+    let assets = 0, liabilities = 0;
+    for (const a of accounts) {
+      const bal = Math.abs(a.balance || 0);
+      if (LIABILITY_TYPES.has(a.type)) liabilities += bal;
+      else assets += bal;
+    }
+    return { assets, liabilities, netWorth: assets - liabilities };
+  };
 
   const shell = ch => (
-    <div className="app-shell" style={{ fontFamily: t.font, background: t.bg, color: t.text, minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", overflow: "hidden" }}>
+    <div className="app-shell" style={{ fontFamily: t.font, background: t.bg, color: t.text, minHeight: "100vh", minHeight: "-webkit-fill-available", maxWidth: 390, margin: "0 auto", position: "relative", overflowX: "hidden", overflowY: "auto" }}>
       <style>{`
         @import url('${t.fontImport}');
+        html{height:-webkit-fill-available}
+        body{min-height:100vh;min-height:-webkit-fill-available;margin:0;padding:0;overflow-x:hidden;width:100%;max-width:100vw}
+        *,*::before,*::after{box-sizing:border-box}
         @keyframes slideIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
         @keyframes fadeIn{from{opacity:0}to{opacity:1}}
         @keyframes pulse{0%,100%{opacity:0.4}50%{opacity:0.7}}
@@ -1599,14 +1643,239 @@ export default function App({ user, householdId }) {
         input,select,textarea{font-size:16px !important;-webkit-text-size-adjust:100%}
         ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
         input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
-        .app-shell{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+        .app-shell{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-overflow-scrolling:touch}
         .app-shell input,.app-shell textarea,.app-shell select{-webkit-user-select:text;user-select:text}
+        @media(max-width:380px){.app-shell{font-size:14px}}
       `}</style>
       <div style={{ position: "absolute", top: -120, right: -80, width: 300, height: 300, background: t.glow, animation: "pulse 6s ease-in-out infinite", pointerEvents: "none" }} />
       <NotificationManager userId={user.uid} householdId={householdId} />
       <ScrollContainer>{ch}</ScrollContainer>
     </div>
   );
+
+  // ── Net Worth Item Form ──
+  const NwItemForm = ({ group, item, onSave, onCancel }) => {
+    const [name, setName] = useState(item?.name || "");
+    const [value, setValue] = useState(item?.value?.toString() || "");
+    const [category, setCategory] = useState(item?.category || (group === "asset" ? "checking" : "credit"));
+    const types = ACCOUNT_TYPES.filter(at => at.group === group);
+    return (
+      <div style={{ padding: "12px 14px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, marginBottom: 8, animation: "slideIn 0.2s ease" }}>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder={group === "asset" ? "e.g. Savings Account" : "e.g. Student Loan"} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, marginBottom: 8, outline: "none" }} autoFocus />
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <select value={category} onChange={e => setCategory(e.target.value)} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 13 }}>
+            {types.map(at => <option key={at.id} value={at.id}>{at.icon} {at.label}</option>)}
+          </select>
+          <input value={value} onChange={e => setValue(e.target.value)} placeholder="0.00" type="number" step="0.01" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, textAlign: "right" }} />
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onCancel} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: "transparent", color: t.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+          <button onClick={() => { if (!name.trim() && !parseFloat(value)) return; onSave({ name: name.trim() || "Untitled", value: parseFloat(value) || 0, category, group }); }} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: t.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save</button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Net Worth Detail Page ──
+  if (showNetWorth && !cur) {
+    const allAccts = getAllBankAccounts();
+    const bankNw = calcNetWorth(allAccts);
+    const manualAssets = nwItems.filter(i => i.group === "asset");
+    const manualLiabilities = nwItems.filter(i => i.group === "liability");
+    const totalAssets = bankNw.assets + manualAssets.reduce((s, i) => s + (i.value || 0), 0);
+    const totalLiabilities = bankNw.liabilities + manualLiabilities.reduce((s, i) => s + (i.value || 0), 0);
+    const netWorth = totalAssets - totalLiabilities;
+
+    const renderNwItem = (item) => {
+      const ti = ACCOUNT_TYPES.find(at => at.id === item.category) || {};
+      const isLiab = item.group === "liability";
+      if (editingNwItem === item.id) return <NwItemForm key={item.id} group={item.group} item={item} onSave={(updates) => { updateNwItem(item.id, updates); setEditingNwItem(null); haptic(); }} onCancel={() => setEditingNwItem(null)} />;
+      return (
+        <div key={item.id} onClick={() => setEditingNwItem(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, cursor: "pointer", transition: "background 0.15s" }}
+          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 16 }}>{ti.icon || "📋"}</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{item.name}</div>
+              <div style={{ fontSize: 10, color: t.textMuted }}>{ti.label || "Other"}</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: isLiab ? t.exp : t.inc, fontFamily: t.mono }}>{isLiab ? "-" : ""}{fmt(Math.abs(item.value || 0))}</span>
+            <button onClick={e => { e.stopPropagation(); if (confirm(`Remove "${item.name}"?`)) { removeNwItem(item.id); haptic(15); } }} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 14, padding: "2px 4px" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = "#475569"}>×</button>
+          </div>
+        </div>
+      );
+    };
+
+    return shell(
+      <div style={{ padding: "24px 20px 100px", animation: "fadeIn 0.4s ease" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+          <button onClick={() => { goHome(); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
+          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text }}>Net Worth</h1>
+        </div>
+
+        {/* Big net worth number */}
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ fontSize: 11, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Net Worth</div>
+          <div style={{ fontSize: 36, fontWeight: 700, color: netWorth >= 0 ? t.inc : t.exp }}><AnimatedCurrency value={netWorth} /></div>
+          <div style={{ display: "flex", justifyContent: "center", gap: 20, marginTop: 12 }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Assets</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: t.inc }}>{fmt(totalAssets)}</div>
+            </div>
+            <div style={{ width: 1, background: t.cardBorder }} />
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 2 }}>Liabilities</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: t.exp }}>{fmt(totalLiabilities)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        {(totalAssets > 0 || totalLiabilities > 0) && (
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", height: 10 }}>
+              <div style={{ width: `${totalAssets / (totalAssets + totalLiabilities) * 100}%`, background: t.inc, transition: "width 0.5s" }} />
+              <div style={{ flex: 1, background: t.exp, transition: "width 0.5s" }} />
+            </div>
+          </div>
+        )}
+
+        {/* Assets section */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: t.inc, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Assets — {fmt(totalAssets)}</div>
+            <button onClick={() => { setAddingNwItem("asset"); haptic(); }} style={{ background: `${t.inc}18`, border: "none", color: t.inc, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Add</button>
+          </div>
+          {addingNwItem === "asset" && <NwItemForm group="asset" onSave={(item) => { addNwItem(item); setAddingNwItem(null); haptic(); }} onCancel={() => setAddingNwItem(null)} />}
+          {manualAssets.map(renderNwItem)}
+          {allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).map(a => (
+            <div key={`bank-${a.id}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, opacity: 0.7 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>{(ACCOUNT_TYPES.find(at => at.id === a.type))?.icon || "🏦"}</span>
+                <div><div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{a.name}</div><div style={{ fontSize: 10, color: t.textMuted }}>from {a._nodeName}</div></div>
+              </div>
+              <span style={{ fontSize: 14, fontWeight: 600, color: t.inc, fontFamily: t.mono }}>{fmt(a.balance || 0)}</span>
+            </div>
+          ))}
+          {manualAssets.length === 0 && allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>Tap + Add to add your first asset</div>}
+        </div>
+
+        {/* Liabilities section */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: t.exp, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Liabilities — {fmt(totalLiabilities)}</div>
+            <button onClick={() => { setAddingNwItem("liability"); haptic(); }} style={{ background: `${t.exp}18`, border: "none", color: t.exp, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Add</button>
+          </div>
+          {addingNwItem === "liability" && <NwItemForm group="liability" onSave={(item) => { addNwItem(item); setAddingNwItem(null); haptic(); }} onCancel={() => setAddingNwItem(null)} />}
+          {manualLiabilities.map(renderNwItem)}
+          {allAccts.filter(a => LIABILITY_TYPES.has(a.type)).map(a => (
+            <div key={`bank-${a.id}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, opacity: 0.7 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>{(ACCOUNT_TYPES.find(at => at.id === a.type))?.icon || "💳"}</span>
+                <div><div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{a.name}</div><div style={{ fontSize: 10, color: t.textMuted }}>from {a._nodeName}</div></div>
+              </div>
+              <span style={{ fontSize: 14, fontWeight: 600, color: t.exp, fontFamily: t.mono }}>-{fmt(Math.abs(a.balance || 0))}</span>
+            </div>
+          ))}
+          {manualLiabilities.length === 0 && allAccts.filter(a => LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>Tap + Add to add your first liability</div>}
+        </div>
+      </div>
+    );
+  }
+
+  // ── AI Advisor Page ──
+  if (showAdvisor && !cur) {
+    const sendToAdvisor = async () => {
+      const msg = advisorInput.trim();
+      if (!msg || advisorLoading) return;
+      setAdvisorInput("");
+      setAdvisorMessages(prev => [...prev, { role: "user", content: msg }]);
+      setAdvisorLoading(true);
+      try {
+        // Build financial context
+        const allRoots = d.nodes.filter(n => n.parentId === null && !n.archived);
+        const summary = allRoots.map(f => {
+          const b = getNodeBalance(d.nodes, d.entries, f.id);
+          return `${f.name}: income ${fmt(b.inc)}, expenses ${fmt(b.exp)}, balance ${fmt(b.balance)}`;
+        }).join("; ");
+        const totalBal = allRoots.reduce((s, f) => s + getNodeBalance(d.nodes, d.entries, f.id).balance, 0);
+        const nwAssets = nwItems.filter(i => i.group === "asset").reduce((s, i) => s + (i.value || 0), 0);
+        const nwLiab = nwItems.filter(i => i.group === "liability").reduce((s, i) => s + (i.value || 0), 0);
+        const context = `User's financial data — Budget folders: ${summary || "none"}. Total budget balance: ${fmt(totalBal)}. Net worth assets: ${fmt(nwAssets)}, liabilities: ${fmt(nwLiab)}, net worth: ${fmt(nwAssets - nwLiab)}.`;
+        const systemPrompt = `You are Maverick AI, a friendly personal finance advisor inside the Maverick Budget app. You have access to the user's financial data below. Give concise, actionable advice. Be warm and encouraging. Keep responses under 150 words.\n\n${context}`;
+        const history = [...advisorMessages.slice(-8), { role: "user", content: msg }];
+
+        const resp = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": localStorage.getItem("maverick-ai-key") || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+          body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 512, system: systemPrompt, messages: history.map(m => ({ role: m.role, content: m.content })) }),
+        });
+        if (!resp.ok) throw new Error("API error");
+        const data = await resp.json();
+        const reply = data.content?.[0]?.text || "Sorry, I couldn't process that. Please try again.";
+        setAdvisorMessages(prev => [...prev, { role: "assistant", content: reply }]);
+      } catch (err) {
+        setAdvisorMessages(prev => [...prev, { role: "assistant", content: "To use AI Advisor, add your Anthropic API key in settings below.\n\nTap the key icon to set it up." }]);
+      }
+      setAdvisorLoading(false);
+    };
+
+    return shell(
+      <div style={{ padding: "24px 20px 0", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", height: "100vh", height: "-webkit-fill-available" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexShrink: 0 }}>
+          <button onClick={() => { goHome(); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
+          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text }}>AI Advisor</h1>
+          <button onClick={() => { const key = prompt("Enter your Anthropic API key:", localStorage.getItem("maverick-ai-key") || ""); if (key !== null) { localStorage.setItem("maverick-ai-key", key); haptic(); } }} style={{ marginLeft: "auto", background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px", cursor: "pointer", fontSize: 16 }} title="Set API key">🔑</button>
+        </div>
+
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: "auto", marginBottom: 12, paddingBottom: 8 }}>
+          {advisorMessages.length === 0 && (
+            <div style={{ textAlign: "center", padding: "40px 16px", color: t.textMuted }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🤖</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: t.text, marginBottom: 8 }}>Maverick AI</div>
+              <div style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>Your personal financial strategist. Ask about budgeting, saving, investing, or debt payoff strategies.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {["How can I save more each month?", "What's my financial health look like?", "Help me make a debt payoff plan"].map(q => (
+                  <button key={q} onClick={() => { setAdvisorInput(q); }} style={{ padding: "10px 14px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "rgba(255,255,255,0.02)", color: t.textSub, fontSize: 12, cursor: "pointer", textAlign: "left" }}>{q}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {advisorMessages.map((msg, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", marginBottom: 8 }}>
+              <div style={{
+                maxWidth: "85%", padding: "10px 14px", borderRadius: 14, fontSize: 13, lineHeight: 1.5,
+                background: msg.role === "user" ? t.accent : t.card,
+                color: msg.role === "user" ? "#fff" : t.text,
+                border: msg.role === "user" ? "none" : `1px solid ${t.cardBorder}`,
+                borderBottomRightRadius: msg.role === "user" ? 4 : 14,
+                borderBottomLeftRadius: msg.role === "user" ? 14 : 4,
+                whiteSpace: "pre-wrap",
+              }}>{msg.content}</div>
+            </div>
+          ))}
+          {advisorLoading && (
+            <div style={{ display: "flex", gap: 4, padding: "10px 14px" }}>
+              {[0, 1, 2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: 3, background: t.textMuted, animation: `pulse 1.2s ease infinite ${i * 0.2}s` }} />)}
+            </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <div style={{ display: "flex", gap: 8, padding: "12px 0 calc(12px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${t.cardBorder}`, flexShrink: 0 }}>
+          <input value={advisorInput} onChange={e => setAdvisorInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendToAdvisor(); } }}
+            placeholder="Ask about your finances..." style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, outline: "none" }} />
+          <button onClick={sendToAdvisor} disabled={advisorLoading || !advisorInput.trim()} style={{ padding: "10px 16px", borderRadius: 10, border: "none", background: advisorInput.trim() ? t.accent : t.surface, color: advisorInput.trim() ? "#fff" : t.textDim, fontSize: 14, fontWeight: 600, cursor: advisorInput.trim() ? "pointer" : "default", transition: "all 0.2s" }}>↑</button>
+        </div>
+      </div>
+    );
+  }
 
   if (!cur) {
     const allRoots = d.nodes.filter(n => n.parentId === null);
@@ -1809,9 +2078,10 @@ export default function App({ user, householdId }) {
     // Tab content: Budgets
     if (activeTab === "budgets") {
       return shell(
-        <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "100vh" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text }}>Budgets</h1>
+        <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+            <button onClick={() => { setActiveTab("home"); setShowSettings(false); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text, flex: 1 }}>Budgets</h1>
             <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? `${t.accent}20` : t.surface, border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10, width: 36, height: 36, cursor: "pointer", fontSize: 18, color: showSettings ? t.accentLight : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>⚙</button>
           </div>
           {settingsPanel}
@@ -1825,9 +2095,10 @@ export default function App({ user, householdId }) {
     // Tab content: Accounts (placeholder)
     if (activeTab === "accounts") {
       return shell(
-        <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "100vh" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text }}>Accounts</h1>
+        <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+            <button onClick={() => { setActiveTab("home"); setShowSettings(false); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text, flex: 1 }}>Accounts</h1>
           </div>
           {settingsPanel}
           <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 20px" }}>
@@ -1842,7 +2113,7 @@ export default function App({ user, householdId }) {
 
     // Tab content: Home (default dashboard)
     return shell(
-      <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+      <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, position: "relative" }}>
@@ -1866,143 +2137,97 @@ export default function App({ user, householdId }) {
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <div style={{ fontSize: 11, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>Total Balance</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
-            <span style={{ fontSize: 32, fontWeight: 700, color: t.text }}><AnimatedCurrency value={totalBalance} /></span>
-            <span style={{
-              fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 20,
-              background: totalBalance >= 0 ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
-              color: totalBalance >= 0 ? "#22c55e" : "#ef4444",
-            }}>{totalBalance >= 0 ? "+" : ""}{roots.length > 0 ? Math.round((totalBalance / Math.max(1, stats.reduce((s, f) => s + f.income, 0))) * 100) : 0}%</span>
+          <div style={{ fontSize: 32, fontWeight: 700, color: t.text, marginTop: 4 }}><AnimatedCurrency value={totalBalance} /></div>
+        </div>
+
+        {/* 2x2 Hero Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
+          {/* Budgets */}
+          <div onClick={() => { setActiveTab("budgets"); haptic(); }} style={{ background: "linear-gradient(135deg, #172554, #1e3a5f)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
+            onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(96,165,250,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📊</div>
+            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(191,219,254,0.7)" }}>Budgets</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#bfdbfe", marginTop: 2 }}>{allRoots.filter(n => !n.archived).length} Folders</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#93c5fd", fontFamily: t.mono, marginTop: 4 }}>{fmt(totalBalance)}</div></div>
+            <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#bfdbfe" }}>›</span>
+          </div>
+
+          {/* Net Worth */}
+          <div onClick={() => { setShowNetWorth(true); haptic(); }} style={{ background: "linear-gradient(135deg, #1c1917, #44403c)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
+            onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(168,162,158,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>💎</div>
+            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(214,211,209,0.7)" }}>Net Worth</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#d6d3d1", marginTop: 2 }}>Track Assets</div></div>
+            <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#d6d3d1" }}>›</span>
+          </div>
+
+          {/* Paycheck Calculator */}
+          <div style={{ background: "linear-gradient(135deg, #1e1b4b, #312e81)", borderRadius: 16, padding: 14, minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", opacity: 0.65, position: "relative" }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(129,140,248,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>💰</div>
+            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(199,210,254,0.7)" }}>Paycheck</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#c7d2fe", marginTop: 2 }}>Calculator</div>
+            <div style={{ fontSize: 10, color: "rgba(199,210,254,0.5)", marginTop: 4 }}>Coming soon</div></div>
+          </div>
+
+          {/* AI Advisor */}
+          <div onClick={() => { setShowAdvisor(true); haptic(); }} style={{ background: "linear-gradient(135deg, #042f2e, #065f46)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
+            onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(52,211,153,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🤖</div>
+            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(167,243,208,0.7)" }}>AI Advisor</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#a7f3d0", marginTop: 2 }}>Ask Anything</div>
+            <div style={{ display: "flex", gap: 3, marginTop: 6 }}>{[0,1,2].map(i => <div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: "#6ee7b7", opacity: 0.4, animation: `pulse 1.5s ease infinite ${i * 0.3}s` }} />)}</div></div>
+            <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#a7f3d0" }}>›</span>
           </div>
         </div>
 
-        {/* Hero banner grid — 2x2 */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
-          {/* Budgets card */}
-          <div onClick={() => { setActiveTab("budgets"); haptic(); }} style={{
-            background: "linear-gradient(135deg, #172554, #1e3a5f)", borderRadius: 16,
-            padding: 16, cursor: "pointer", transition: "transform 0.15s", position: "relative", overflow: "hidden", minHeight: 120,
-            display: "flex", flexDirection: "column", justifyContent: "space-between",
-          }} onMouseEnter={e => e.currentTarget.style.transform = "scale(1.02)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
-            <div>
-              <span style={{ fontSize: 24 }}>📂</span>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Budgets</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>{roots.filter(r => !r.archived).length} folder{roots.filter(r => !r.archived).length !== 1 ? "s" : ""}</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>{fmt(totalBalance)}</div>
-            </div>
-          </div>
-
-          {/* Net Worth card */}
-          <div style={{
-            background: "linear-gradient(135deg, #1c1917, #44403c)", borderRadius: 16,
-            padding: 16, position: "relative", overflow: "hidden", minHeight: 120, opacity: 0.75,
-            display: "flex", flexDirection: "column", justifyContent: "space-between",
-          }}>
-            <div>
-              <span style={{ fontSize: 24 }}>📊</span>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Net Worth</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>$--</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>Coming soon</div>
-            </div>
-          </div>
-
-          {/* Paycheck card */}
-          <div style={{
-            background: "linear-gradient(135deg, #1e1b4b, #312e81)", borderRadius: 16,
-            padding: 16, position: "relative", overflow: "hidden", minHeight: 120, opacity: 0.75,
-            display: "flex", flexDirection: "column", justifyContent: "space-between",
-          }}>
-            <div>
-              <span style={{ fontSize: 24 }}>💵</span>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Paycheck</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>Calculator</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>Coming soon</div>
-            </div>
-          </div>
-
-          {/* AI Advisor card */}
-          <div style={{
-            background: "linear-gradient(135deg, #042f2e, #065f46)", borderRadius: 16,
-            padding: 16, position: "relative", overflow: "hidden", minHeight: 120, opacity: 0.75,
-            display: "flex", flexDirection: "column", justifyContent: "space-between",
-          }}>
-            <div>
-              <span style={{ fontSize: 24 }}>🤖</span>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>AI Advisor</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>--</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>Coming soon</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Quick actions bar */}
-        <div style={{
-          background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14,
-          padding: "12px 8px", marginBottom: 24, display: "flex", justifyContent: "space-around", alignItems: "center",
-        }}>
+        {/* Quick Actions */}
+        <div style={{ background: "linear-gradient(135deg, #3b0764, #581c87)", borderRadius: 16, padding: "12px 16px", marginBottom: 20, display: "flex", justifyContent: "space-around", alignItems: "center" }}>
           {[
-            { icon: "➕", label: "Add", action: () => { setActiveTab("budgets"); haptic(); } },
-            { icon: "🔄", label: "Transfer", action: () => { haptic(); } },
-            { icon: "📥", label: "Import", action: () => { haptic(); } },
-            { icon: "⚙️", label: "Settings", action: () => { setShowSettings(!showSettings); haptic(); } },
-          ].map((qa, i) => (
-            <button key={i} onClick={qa.action} style={{
-              background: `${t.accent}10`, border: `1px solid ${t.accent}15`, borderRadius: 12,
-              width: 64, height: 56, cursor: "pointer",
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4,
-              color: t.textSub, transition: "all 0.15s",
-            }} onMouseEnter={e => { e.currentTarget.style.background = `${t.accent}20`; }} onMouseLeave={e => { e.currentTarget.style.background = `${t.accent}10`; }}>
-              <span style={{ fontSize: 18 }}>{qa.icon}</span>
-              <span style={{ fontSize: 9, fontWeight: 600, color: t.textMuted }}>{qa.label}</span>
+            { icon: "📂", label: "New Folder", action: () => { setActiveTab("budgets"); setTimeout(() => setAddingRoot(true), 200); } },
+            { icon: "📊", label: "Net Worth", action: () => setShowNetWorth(true) },
+            { icon: "🤖", label: "AI Help", action: () => setShowAdvisor(true) },
+            { icon: "⚙", label: "Settings", action: () => setShowSettings(!showSettings) },
+          ].map(a => (
+            <button key={a.label} onClick={() => { a.action(); haptic(); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, background: "none", border: "none", color: "#e9d5ff", cursor: "pointer", fontSize: 10, fontWeight: 500, opacity: 0.9 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{a.icon}</div>
+              {a.label}
             </button>
           ))}
         </div>
 
-        {/* Recent activity */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Recent Activity</div>
-          {recentEntries.length === 0 && (
-            <div style={{ textAlign: "center", padding: "24px 0", color: t.textMuted, fontSize: 12 }}>No transactions yet</div>
-          )}
-          {recentEntries.map((entry, i) => (
-            <div key={entry.id || i} onClick={() => { if (entry.folder) { goTo(entry.folder.id); haptic(); } }}
-              style={{
-                display: "flex", alignItems: "center", gap: 12, padding: "10px 12px",
-                background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 6,
-                cursor: entry.folder ? "pointer" : "default", transition: "background 0.15s",
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
-              onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
-              <div style={{
-                width: 36, height: 36, borderRadius: 10,
-                background: entry.cat ? `${entry.cat.color}20` : "rgba(255,255,255,0.05)",
-                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16,
-              }}>
-                {entry.cat ? entry.cat.icon : "📋"}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
-                <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>
-                  {entry.cat ? entry.cat.label : "Other"}{entry.folder ? ` · ${entry.folder.name}` : ""}{entry.dateISO ? ` · ${fmtDate(entry.dateISO)}` : ""}
+        {/* Recent Activity */}
+        {recentEntries.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 8, paddingLeft: 2 }}>Recent Activity</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {recentEntries.map(entry => (
+                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, transition: "background 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+                  onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: 10,
+                    background: entry.cat ? `${entry.cat.color}20` : "rgba(255,255,255,0.05)",
+                    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16,
+                  }}>
+                    {entry.cat ? entry.cat.icon : "📋"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
+                    <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>
+                      {entry.cat ? entry.cat.label : "Other"}{entry.folder ? ` · ${entry.folder.name}` : ""}{entry.dateISO ? ` · ${fmtDate(entry.dateISO)}` : ""}
+                    </div>
+                  </div>
+                  <div style={{
+                    fontSize: 14, fontWeight: 600, flexShrink: 0,
+                    color: entry.type === "income" ? t.inc : t.exp,
+                  }}>
+                    {entry.type === "income" ? "+" : "-"}{fmt(Math.abs(entry.amount || 0))}
+                  </div>
                 </div>
-              </div>
-              <div style={{
-                fontSize: 14, fontWeight: 600, flexShrink: 0,
-                color: entry.type === "income" ? t.inc : t.exp,
-              }}>
-                {entry.type === "income" ? "+" : "-"}{fmt(Math.abs(entry.amount || 0))}
-              </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        )}
 
         {/* Spacer for bottom nav */}
         <div style={{ flex: 1 }} />
@@ -2014,12 +2239,13 @@ export default function App({ user, householdId }) {
   }
 
   return shell(
-    <NodePage node={cur} parentName={par ? par.name : "Folders"} nodes={d.nodes} entries={d.entries} customCategories={d.customCategories} displayPrefs={displayPrefs}
-      onBack={goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
+    <NodePage node={cur} parentName={par ? par.name : "Home"} nodes={d.nodes} entries={d.entries} customCategories={d.customCategories} displayPrefs={displayPrefs}
+      onBack={navStack.length === 1 ? goHome : goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
       addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
       addCategory={app.addCategory} removeCategory={app.removeCategory} getDesc={app.getDesc}
       savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
-      allBankAccounts={d.bankAccounts} setBankAccountsForNode={app.setBankAccountsForNode} addBankAccountToNode={app.addBankAccount} updateBankAccountInNode={app.updateBankAccount} removeBankAccountFromNode={app.removeBankAccountFromNode}
-      addEntries={app.addEntries} markAllPaid={app.markAllPaid} markAllUnpaid={app.markAllUnpaid} />
+      allBankAccounts={d.bankAccounts} setBankAccountsForNode={app.setBankAccountsForNode} addBankAccountToNode={app.addBankAccount} updateBankAccountInNode={app.updateBankAccount} removeBankAccountFromNode={app.removeBankAccount}
+      addEntries={app.addEntries} markAllPaid={app.markAllPaid} markAllUnpaid={app.markAllUnpaid}
+    />
   );
 }
