@@ -306,7 +306,7 @@ function getAllDescendantEntries(nodes, entries, nid) {
 // ── Shared UI ──
 function FolderSvg({ color = "#f59e0b", size = 20 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>); }
 function FolderPlusSvg({ color = "#94a3b8", size = 20 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></svg>); }
-function BottomBar({ children }) { return (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 390, padding: "12px 20px calc(20px + env(safe-area-inset-bottom, 0px))", background: `linear-gradient(to top, ${T().bg.includes("#0a0a1a") ? "#0a0a1a" : "#021a1a"} 60%, transparent)`, display: "flex", gap: 10, zIndex: 10 }}>{children}</div>); }
+function BottomBar({ children }) { return (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 500, padding: "12px 20px calc(20px + env(safe-area-inset-bottom, 0px))", background: `linear-gradient(to top, ${T().bg.includes("#0a0a1a") ? "#0a0a1a" : "#021a1a"} 60%, transparent)`, display: "flex", gap: 10, zIndex: 10 }}>{children}</div>); }
 function Btn({ onClick, bg, color, children }) { return (<button onClick={onClick} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", background: bg, color, transition: "all 0.2s" }}>{children}</button>); }
 function EmptyState({ text, sub }) { return (<div style={{ textAlign: "center", padding: "40px 0", color: "#334155" }}><div style={{ fontSize: 32, marginBottom: 8 }}>◇</div><div style={{ fontSize: 13 }}>{text}</div>{sub && <div style={{ fontSize: 11, marginTop: 4, color: "#1e293b" }}>{sub}</div>}</div>); }
 function AnimNum({ value }) { const [d, sD] = useState(value); const r = useRef(); useEffect(() => { const s = d, e = value; if (s === e) return; const t0 = performance.now(); function tk(n) { const t = Math.min((n - t0) / 400, 1); sD(s + (e - s) * (1 - Math.pow(1 - t, 3))); if (t < 1) r.current = requestAnimationFrame(tk); } r.current = requestAnimationFrame(tk); return () => cancelAnimationFrame(r.current); }, [value]); return (<span>{fmt(d)}</span>); }
@@ -1636,7 +1636,7 @@ export default function App({ user, householdId }) {
   };
 
   const shell = ch => (
-    <div className="app-shell" style={{ fontFamily: t.font, background: t.bg, color: t.text, minHeight: "100vh", minHeight: "-webkit-fill-available", maxWidth: 390, margin: "0 auto", position: "relative", overflowX: "hidden", overflowY: "auto" }}>
+    <div className="app-shell" style={{ fontFamily: t.font, background: t.bg, color: t.text, minHeight: "100vh", minHeight: "-webkit-fill-available", maxWidth: 500, margin: "0 auto", position: "relative", overflowX: "hidden", overflowY: "auto" }}>
       <style>{`
         @import url('${t.fontImport}');
         html{height:-webkit-fill-available}
@@ -2495,7 +2495,13 @@ ${context}`;
     // Dashboard helpers
     const hour = new Date().getHours();
     const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-    const displayName = user.displayName || user.email?.split("@")[0] || "there";
+    const displayName = (() => {
+      if (user.displayName) return user.displayName.split(" ")[0];
+      const tag = user.email?.split("@")[0] || "there";
+      // Extract first name from email: "michaelmuirhead21" → "Michael", "john.doe" → "John"
+      const raw = tag.replace(/[._-]/g, " ").replace(/\d+/g, "").trim().split(" ")[0];
+      return raw ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : "there";
+    })();
     const totalBalance = allRoots.filter(n => !n.archived).reduce((sum, f) => sum + getNodeBalance(d.nodes, d.entries, f.id).balance, 0);
 
     // Recent transactions — last 5 across all folders
@@ -2695,8 +2701,7 @@ ${context}`;
           </div>
           {settingsPanel}
           {folderList}
-          <div style={{ height: 56 }} />
-          {bottomNav}
+          <div style={{ height: 24 }} />
         </div>
       );
     }
@@ -2715,7 +2720,6 @@ ${context}`;
             <div style={{ fontSize: 16, fontWeight: 600, color: t.text, marginBottom: 6 }}>Coming Soon</div>
             <div style={{ fontSize: 12, color: t.textMuted, textAlign: "center" }}>Bank account tracking and reconciliation will appear here.</div>
           </div>
-          {bottomNav}
         </div>
       );
     }
