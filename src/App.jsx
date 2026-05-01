@@ -1219,7 +1219,17 @@ function NodePage({ node, parentName, nodes, entries, customCategories, displayP
   const [bulkAction, setBulkAction] = useState(null);
   const [bulkDate, setBulkDate] = useState("");
   const [bulkAccountId, setBulkAccountId] = useState("");
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [bottomVisible, setBottomVisible] = useState(false);
   const fileRef = useRef(null);
+  const bottomBtnsRef = useRef(null);
+
+  useEffect(() => {
+    if (!bottomBtnsRef.current) return;
+    const obs = new IntersectionObserver(([entry]) => setBottomVisible(entry.isIntersecting), { threshold: 0.1 });
+    obs.observe(bottomBtnsRef.current);
+    return () => obs.disconnect();
+  }, []);
 
   const toggleSelect = (id) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); if (s.size === 0) { setSelectMode(false); setBulkAction(null); } return s; });
   const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setBulkAction(null); };
@@ -1568,7 +1578,7 @@ function NodePage({ node, parentName, nodes, entries, customCategories, displayP
                 )}
               </>
             )}
-            <div style={{ display: "flex", gap: 10, padding: "16px 0 24px" }}>
+            <div ref={bottomBtnsRef} style={{ display: "flex", gap: 10, padding: "16px 0 24px" }}>
               <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
               <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
             </div>
@@ -1576,6 +1586,49 @@ function NodePage({ node, parentName, nodes, entries, customCategories, displayP
           </>
         )}
       </div>
+
+      {/* Floating Quick Add button — hides when bottom Income/Expense buttons are visible */}
+      {!bottomVisible && !editingId && (
+        <div style={{ position: "fixed", bottom: "calc(24px + env(safe-area-inset-bottom, 0px))", right: "max(20px, calc(50% - 230px))", zIndex: 200 }}>
+          {quickAddOpen && (
+            <div style={{
+              position: "absolute", bottom: 64, right: 0,
+              display: "flex", flexDirection: "column", gap: 8, minWidth: 150,
+              animation: "fadeIn 0.15s ease",
+            }}>
+              <button onClick={() => { handleAddEntry("income"); setQuickAddOpen(false); haptic(); }} style={{
+                padding: "12px 20px", borderRadius: 12,
+                background: `${T().inc}20`, border: `1px solid ${T().inc}40`,
+                color: T().inc, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+                display: "flex", alignItems: "center", gap: 8,
+              }}>
+                <span style={{ fontSize: 16 }}>↗</span> Income
+              </button>
+              <button onClick={() => { handleAddEntry("expense"); setQuickAddOpen(false); haptic(); }} style={{
+                padding: "12px 20px", borderRadius: 12,
+                background: `${T().exp}20`, border: `1px solid ${T().exp}40`,
+                color: T().exp, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+                display: "flex", alignItems: "center", gap: 8,
+              }}>
+                <span style={{ fontSize: 16 }}>↙</span> Expense
+              </button>
+            </div>
+          )}
+          <button onClick={() => { setQuickAddOpen(!quickAddOpen); haptic(); }} style={{
+            width: 52, height: 52, borderRadius: "50%",
+            background: `linear-gradient(135deg, ${T().accent}, ${T().accentLight})`,
+            border: "none", cursor: "pointer",
+            boxShadow: `0 4px 20px ${T().accent}50`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "transform 0.2s ease, box-shadow 0.2s ease",
+            transform: quickAddOpen ? "rotate(45deg)" : "rotate(0deg)",
+          }}>
+            <span style={{ fontSize: 26, color: "#fff", lineHeight: 1, fontWeight: 300 }}>+</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
