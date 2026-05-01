@@ -1659,6 +1659,91 @@ export default function App({ user, householdId }) {
     </div>
   );
 
+  // ── Proactive Insights Engine ──
+  const generateInsights = () => {
+    const insights = [];
+    const now = new Date();
+    const curMonth = now.toISOString().slice(0, 7);
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+    const allEntries = d.entries || [];
+    const cats = allCats();
+
+    const curExpenses = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(curMonth));
+    const lastExpenses = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(lastMonth));
+    const curTotal = curExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const lastTotal = lastExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const curIncome = allEntries.filter(e => e.type === "income" && (e.dateISO || "").startsWith(curMonth)).reduce((s, e) => s + (e.amount || 0), 0);
+
+    // 1. Category spending spikes
+    const curCatTotals = {};
+    const lastCatTotals = {};
+    curExpenses.forEach(e => { const c = cats.find(ct => ct.id === (e.category || "other")); const l = c ? c.label : "Other"; curCatTotals[l] = (curCatTotals[l] || 0) + (e.amount || 0); });
+    lastExpenses.forEach(e => { const c = cats.find(ct => ct.id === (e.category || "other")); const l = c ? c.label : "Other"; lastCatTotals[l] = (lastCatTotals[l] || 0) + (e.amount || 0); });
+    Object.entries(curCatTotals).forEach(([cat, amt]) => {
+      const prev = lastCatTotals[cat] || 0;
+      if (prev > 0 && amt > prev * 1.3 && amt - prev > 20) {
+        const pct = Math.round((amt - prev) / prev * 100);
+        insights.push({ type: "warning", icon: "📈", title: `${cat} spending up ${pct}%`, sub: `${fmt(amt)} vs ${fmt(prev)} last month`, action: `Why is my ${cat.toLowerCase()} spending up this month?` });
+      }
+    });
+
+    // 2. Savings rate
+    if (curIncome > 0) {
+      const rate = Math.round((curIncome - curTotal) / curIncome * 100);
+      if (rate < 10) insights.push({ type: "alert", icon: "⚠️", title: `Savings rate: ${rate}%`, sub: "Below the 20% recommended target", action: "How can I improve my savings rate?" });
+      else if (rate >= 30) insights.push({ type: "positive", icon: "🎉", title: `Saving ${rate}% of income`, sub: "Great job — above the 20% target!", action: "What should I do with my extra savings?" });
+    }
+
+    // 3. Unallocated cash
+    const insightRoots = d.nodes.filter(n => n.parentId === null && !n.archived);
+    const totalBal = insightRoots.reduce((s, f) => s + getNodeBalance(d.nodes, allEntries, f.id).balance, 0);
+    if (totalBal > 500) insights.push({ type: "suggestion", icon: "💡", title: `${fmt(totalBal)} unallocated`, sub: "Consider moving some to savings or investments", action: `I have ${fmt(totalBal)} in my budget balance. Where should I put it?` });
+
+    // 4. Savings goals
+    (d.savingsGoals || []).forEach(g => {
+      if (g.target && g.current !== undefined) {
+        const pct = Math.round((g.current || 0) / g.target * 100);
+        if (pct >= 90 && pct < 100) insights.push({ type: "positive", icon: "🏁", title: `Almost there: ${g.name}`, sub: `${pct}% complete — ${fmt(g.target - (g.current || 0))} to go!`, action: `How can I close the gap on my ${g.name} goal?` });
+        else if (pct < 25 && g.target > 100) insights.push({ type: "warning", icon: "🎯", title: `${g.name}: ${pct}% funded`, sub: `${fmt(g.current || 0)} of ${fmt(g.target)} target`, action: `Help me create a plan to reach my ${g.name} goal` });
+      }
+    });
+
+    // 5. Debt-to-asset ratio
+    const manualAssets = nwItems.filter(i => i.group === "asset").reduce((s, i) => s + (i.value || 0), 0);
+    const manualLiab = nwItems.filter(i => i.group === "liability").reduce((s, i) => s + (i.value || 0), 0);
+    const bankAccts = getAllBankAccounts();
+    const totalAssets = manualAssets + bankAccts.filter(a => !LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + (a.balance || 0), 0);
+    const totalLiab = manualLiab + bankAccts.filter(a => LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + Math.abs(a.balance || 0), 0);
+    if (totalLiab > 0 && totalAssets > 0 && totalLiab / totalAssets > 0.5) {
+      insights.push({ type: "alert", icon: "🏦", title: `Debt-to-asset: ${Math.round(totalLiab / totalAssets * 100)}%`, sub: "Above 50% — debt reduction should be a priority", action: "Help me make a debt payoff plan" });
+    }
+
+    // 6. Monthly trend
+    if (lastTotal > 0 && curTotal > lastTotal * 1.15) {
+      insights.push({ type: "warning", icon: "📊", title: `Overall spending up ${Math.round((curTotal - lastTotal) / lastTotal * 100)}%`, sub: `${fmt(curTotal)} this month vs ${fmt(lastTotal)} last month`, action: "Where am I overspending compared to last month?" });
+    } else if (lastTotal > 0 && curTotal < lastTotal * 0.85) {
+      insights.push({ type: "positive", icon: "📉", title: `Spending down ${Math.round((lastTotal - curTotal) / lastTotal * 100)}%`, sub: `${fmt(curTotal)} this month vs ${fmt(lastTotal)} last month`, action: "I've cut spending — where should I put the savings?" });
+    }
+
+    // 7. Recurring expenses
+    const entryLabels = {};
+    allEntries.filter(e => e.type === "expense").forEach(e => {
+      const key = (e.label || "").toLowerCase().trim();
+      if (!key) return;
+      if (!entryLabels[key]) entryLabels[key] = { label: e.label, months: new Set(), total: 0, count: 0 };
+      if (e.dateISO) entryLabels[key].months.add(e.dateISO.slice(0, 7));
+      entryLabels[key].total += e.amount || 0;
+      entryLabels[key].count++;
+    });
+    const subscriptions = Object.values(entryLabels).filter(r => r.months.size >= 3);
+    const subTotal = subscriptions.reduce((s, r) => s + r.total / r.count, 0);
+    if (subscriptions.length >= 3) {
+      insights.push({ type: "suggestion", icon: "🔄", title: `${subscriptions.length} recurring expenses`, sub: `~${fmt(subTotal)}/month in subscriptions`, action: "Review my recurring expenses and suggest what to cut" });
+    }
+
+    return insights.slice(0, 4);
+  };
+
   // ── Net Worth Item Form ──
   const NwItemForm = ({ group, item, onSave, onCancel }) => {
     const [name, setName] = useState(item?.name || "");
@@ -1938,92 +2023,6 @@ Net Worth: ${fmt(totalAssets - totalLiab)}
 ${savingsRate !== null ? `Savings Rate: ${savingsRate}% of income${savingsRate < 20 ? " (below 20% target)" : " (healthy)"}` : "Savings rate: not enough income data"}
 ${debtToAssetRatio !== null ? `Debt-to-Asset Ratio: ${debtToAssetRatio}%${debtToAssetRatio > 50 ? " (high — focus on debt reduction)" : " (manageable)"}` : "Debt-to-asset ratio: no asset/liability data"}
 === END SNAPSHOT ===`;
-    };
-
-    // ── Proactive Insights Engine ──
-    const generateInsights = () => {
-      const insights = [];
-      const now = new Date();
-      const curMonth = now.toISOString().slice(0, 7);
-      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
-      const allEntries = d.entries || [];
-      const cats = allCats();
-
-      // Current vs last month totals
-      const curExpenses = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(curMonth));
-      const lastExpenses = allEntries.filter(e => e.type === "expense" && (e.dateISO || "").startsWith(lastMonth));
-      const curTotal = curExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-      const lastTotal = lastExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-      const curIncome = allEntries.filter(e => e.type === "income" && (e.dateISO || "").startsWith(curMonth)).reduce((s, e) => s + (e.amount || 0), 0);
-
-      // 1. Spending spike detection per category
-      const curCatTotals = {};
-      const lastCatTotals = {};
-      curExpenses.forEach(e => { const c = cats.find(ct => ct.id === (e.category || "other")); const l = c ? c.label : "Other"; curCatTotals[l] = (curCatTotals[l] || 0) + (e.amount || 0); });
-      lastExpenses.forEach(e => { const c = cats.find(ct => ct.id === (e.category || "other")); const l = c ? c.label : "Other"; lastCatTotals[l] = (lastCatTotals[l] || 0) + (e.amount || 0); });
-      Object.entries(curCatTotals).forEach(([cat, amt]) => {
-        const prev = lastCatTotals[cat] || 0;
-        if (prev > 0 && amt > prev * 1.3 && amt - prev > 20) {
-          const pct = Math.round((amt - prev) / prev * 100);
-          insights.push({ type: "warning", icon: "📈", title: `${cat} spending up ${pct}%`, sub: `${fmt(amt)} vs ${fmt(prev)} last month`, action: `Why is my ${cat.toLowerCase()} spending up this month?` });
-        }
-      });
-
-      // 2. Savings rate check
-      if (curIncome > 0) {
-        const rate = Math.round((curIncome - curTotal) / curIncome * 100);
-        if (rate < 10) insights.push({ type: "alert", icon: "⚠️", title: `Savings rate: ${rate}%`, sub: "Below the 20% recommended target", action: "How can I improve my savings rate?" });
-        else if (rate >= 30) insights.push({ type: "positive", icon: "🎉", title: `Saving ${rate}% of income`, sub: "Great job — above the 20% target!", action: "What should I do with my extra savings?" });
-      }
-
-      // 3. Unallocated cash suggestion
-      const allRoots = d.nodes.filter(n => n.parentId === null && !n.archived);
-      const totalBal = allRoots.reduce((s, f) => s + getNodeBalance(d.nodes, allEntries, f.id).balance, 0);
-      if (totalBal > 500) insights.push({ type: "suggestion", icon: "💡", title: `${fmt(totalBal)} unallocated`, sub: "Consider moving some to savings or investments", action: `I have ${fmt(totalBal)} in my budget balance. Where should I put it?` });
-
-      // 4. Savings goals at risk
-      (d.savingsGoals || []).forEach(g => {
-        if (g.target && g.current !== undefined) {
-          const pct = Math.round((g.current || 0) / g.target * 100);
-          if (pct >= 90 && pct < 100) insights.push({ type: "positive", icon: "🏁", title: `Almost there: ${g.name}`, sub: `${pct}% complete — ${fmt(g.target - (g.current || 0))} to go!`, action: `How can I close the gap on my ${g.name} goal?` });
-          else if (pct < 25 && g.target > 100) insights.push({ type: "warning", icon: "🎯", title: `${g.name}: ${pct}% funded`, sub: `${fmt(g.current || 0)} of ${fmt(g.target)} target`, action: `Help me create a plan to reach my ${g.name} goal` });
-        }
-      });
-
-      // 5. High debt-to-asset ratio
-      const manualAssets = nwItems.filter(i => i.group === "asset").reduce((s, i) => s + (i.value || 0), 0);
-      const manualLiab = nwItems.filter(i => i.group === "liability").reduce((s, i) => s + (i.value || 0), 0);
-      const bankAccts = getAllBankAccounts();
-      const totalAssets = manualAssets + bankAccts.filter(a => !LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + (a.balance || 0), 0);
-      const totalLiab = manualLiab + bankAccts.filter(a => LIABILITY_TYPES.has(a.type)).reduce((s, a) => s + Math.abs(a.balance || 0), 0);
-      if (totalLiab > 0 && totalAssets > 0 && totalLiab / totalAssets > 0.5) {
-        insights.push({ type: "alert", icon: "🏦", title: `Debt-to-asset: ${Math.round(totalLiab / totalAssets * 100)}%`, sub: "Above 50% — debt reduction should be a priority", action: "Help me make a debt payoff plan" });
-      }
-
-      // 6. Monthly spending trend
-      if (lastTotal > 0 && curTotal > lastTotal * 1.15) {
-        insights.push({ type: "warning", icon: "📊", title: `Overall spending up ${Math.round((curTotal - lastTotal) / lastTotal * 100)}%`, sub: `${fmt(curTotal)} this month vs ${fmt(lastTotal)} last month`, action: "Where am I overspending compared to last month?" });
-      } else if (lastTotal > 0 && curTotal < lastTotal * 0.85) {
-        insights.push({ type: "positive", icon: "📉", title: `Spending down ${Math.round((lastTotal - curTotal) / lastTotal * 100)}%`, sub: `${fmt(curTotal)} this month vs ${fmt(lastTotal)} last month`, action: "I've cut spending — where should I put the savings?" });
-      }
-
-      // 7. Recurring expense optimization
-      const entryLabels = {};
-      allEntries.filter(e => e.type === "expense").forEach(e => {
-        const key = (e.label || "").toLowerCase().trim();
-        if (!key) return;
-        if (!entryLabels[key]) entryLabels[key] = { label: e.label, months: new Set(), total: 0, count: 0 };
-        if (e.dateISO) entryLabels[key].months.add(e.dateISO.slice(0, 7));
-        entryLabels[key].total += e.amount || 0;
-        entryLabels[key].count++;
-      });
-      const subscriptions = Object.values(entryLabels).filter(r => r.months.size >= 3);
-      const subTotal = subscriptions.reduce((s, r) => s + r.total / r.count, 0);
-      if (subscriptions.length >= 3) {
-        insights.push({ type: "suggestion", icon: "🔄", title: `${subscriptions.length} recurring expenses`, sub: `~${fmt(subTotal)}/month in subscriptions`, action: "Review my recurring expenses and suggest what to cut" });
-      }
-
-      return insights.slice(0, 4); // Max 4 insight cards
     };
 
     // ── Debt Payoff Calculator ──
