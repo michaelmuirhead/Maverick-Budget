@@ -2574,13 +2574,30 @@ ${context}`;
     })();
     const totalBalance = allRoots.filter(n => !n.archived).reduce((sum, f) => sum + getNodeBalance(d.nodes, d.entries, f.id).balance, 0);
 
-    // Recent transactions — last 5 across all folders
-    const recentEntries = [...d.entries].sort((a, b) => (b.dateISO || "").localeCompare(a.dateISO || "")).slice(0, 5).map(entry => {
-      const node = d.nodes.find(n => n.id === entry.nodeId);
-      const folder = node?.parentId ? d.nodes.find(n => n.id === node.parentId) : node;
-      const cat = allCats().find(c => c.id === entry.category);
-      return { ...entry, folder, cat };
-    });
+    // Around This Time — transactions within ±7 days of today, sorted by proximity to today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayMs = today.getTime();
+    const windowDays = 7;
+    const windowMs = windowDays * 86400000;
+    const recentEntries = (d.entries || [])
+      .map(entry => {
+        if (!entry.dateISO) return null;
+        const dt = new Date(entry.dateISO + "T00:00:00");
+        if (isNaN(dt)) return null;
+        const diff = dt.getTime() - todayMs;
+        if (Math.abs(diff) > windowMs) return null;
+        return { entry, diff };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Math.abs(a.diff) - Math.abs(b.diff) || b.diff - a.diff)
+      .slice(0, 8)
+      .map(({ entry }) => {
+        const node = d.nodes.find(n => n.id === entry.nodeId);
+        const folder = node?.parentId ? d.nodes.find(n => n.id === node.parentId) : node;
+        const cat = allCats().find(c => c.id === entry.category);
+        return { ...entry, folder, cat };
+      });
 
     // Settings panel (shared across tabs)
     const settingsPanel = showSettings && (
@@ -2728,6 +2745,153 @@ ${context}`;
       </>
     );
 
+    // Financial Overview charts (used on the Charts tab)
+    const chartsHero = (() => {
+      const now = new Date();
+      const months = [];
+      for (let i = 5; i >= 0; i--) {
+        const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        months.push({ key: `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`, label: dt.toLocaleDateString("en-US",{month:"short"}) });
+      }
+      const allE = d.entries || [];
+      const monthData = months.map(m => {
+        const me = allE.filter(e => (e.dateISO||"").startsWith(m.key));
+        const inc = me.filter(e => e.type==="income").reduce((s,e)=>s+(e.amount||0),0);
+        const exp = me.filter(e => e.type==="expense" && e.paid!==false).reduce((s,e)=>s+(e.amount||0),0);
+        return { ...m, inc, exp, net: inc - exp };
+      });
+      const hasData = monthData.some(m => m.inc > 0 || m.exp > 0);
+
+      const curKey = months[months.length-1].key;
+      const curExp = allE.filter(e => e.type==="expense" && e.paid!==false && (e.dateISO||"").startsWith(curKey));
+      const cats = allCats();
+      const catMap = {};
+      curExp.forEach(e => { const cid = e.category||"other"; catMap[cid] = (catMap[cid]||0) + (e.amount||0); });
+      const catData = Object.entries(catMap).map(([id,total]) => {
+        const c = cats.find(x=>x.id===id) || {label:"Other",color:"#94a3b8"};
+        return { id, label: c.label, color: c.color, total };
+      }).sort((a,b)=>b.total-a.total).slice(0,6);
+      const catTotal = catData.reduce((s,c)=>s+c.total,0);
+
+      const maxBar = Math.max(...monthData.map(m => Math.max(m.inc, m.exp)), 1);
+
+      const nets = monthData.map(m => m.net);
+      const minNet = Math.min(...nets, 0);
+      const maxNet = Math.max(...nets, 1);
+      const netRange = (maxNet - minNet) || 1;
+      const lineH = 50;
+      const linePoints = monthData.map((m,i) => {
+        const x = 8 + (i / Math.max(monthData.length-1,1)) * 164;
+        const y = lineH - 4 - ((m.net - minNet) / netRange) * (lineH - 8);
+        return `${x},${y}`;
+      }).join(" ");
+
+      if (!hasData) {
+        return (
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 16, padding: "20px 18px", marginBottom: 20, textAlign: "center" }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>📈</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>Financial Overview</div>
+            <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>Add transactions with dates to see your charts here</div>
+          </div>
+        );
+      }
+
+      return (
+        <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 16, padding: "16px 16px 12px", marginBottom: 20, animation: "fadeIn 0.5s ease" }}>
+          <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 12, paddingLeft: 2 }}>Financial Overview</div>
+
+          <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
+            <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <svg width="90" height="90" viewBox="0 0 90 90">
+                {(() => {
+                  if (catData.length === 0) return <circle cx="45" cy="45" r="32" fill="none" stroke={t.cardBorder} strokeWidth="8" />;
+                  const slices = [];
+                  let cumAngle = -90;
+                  catData.forEach((c, i) => {
+                    const pct = c.total / catTotal;
+                    const angle = pct * 360;
+                    const gap = catData.length > 1 ? 3 : 0;
+                    const startA = cumAngle + gap/2;
+                    const endA = cumAngle + angle - gap/2;
+                    const largeArc = (endA - startA) > 180 ? 1 : 0;
+                    const r = 32;
+                    const sx = 45 + r * Math.cos(startA * Math.PI/180);
+                    const sy = 45 + r * Math.sin(startA * Math.PI/180);
+                    const ex = 45 + r * Math.cos(endA * Math.PI/180);
+                    const ey = 45 + r * Math.sin(endA * Math.PI/180);
+                    if (angle > 1) {
+                      slices.push(<path key={i} d={`M${sx},${sy} A${r},${r} 0 ${largeArc} 1 ${ex},${ey}`} fill="none" stroke={c.color} strokeWidth="8" strokeLinecap="round" opacity="0.85" />);
+                    }
+                    cumAngle += angle;
+                  });
+                  return slices;
+                })()}
+                <text x="45" y="42" textAnchor="middle" fill={t.text} fontSize="11" fontWeight="700" fontFamily={t.font}>{catTotal >= 1000 ? `$${(catTotal/1000).toFixed(1)}k` : `$${catTotal.toFixed(0)}`}</text>
+                <text x="45" y="54" textAnchor="middle" fill={t.textMuted} fontSize="7" fontWeight="500" fontFamily={t.font}>spent</text>
+              </svg>
+            </div>
+
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 3, minWidth: 0 }}>
+              {catData.slice(0,5).map(c => (
+                <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: c.color, flexShrink: 0, opacity: 0.85 }} />
+                  <div style={{ fontSize: 10, color: t.textSub, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</div>
+                  <div style={{ fontSize: 10, color: t.text, fontWeight: 600, fontFamily: t.mono, flexShrink: 0 }}>{c.total >= 1000 ? `$${(c.total/1000).toFixed(1)}k` : `$${c.total.toFixed(0)}`}</div>
+                </div>
+              ))}
+              {catData.length > 5 && <div style={{ fontSize: 9, color: t.textMuted }}>+{catData.length-5} more</div>}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 9, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6, display: "flex", alignItems: "center", gap: 10 }}>
+              <span>Income vs Expenses</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 3, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: t.inc, opacity: 0.7 }} /> Inc</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 3, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: t.exp, opacity: 0.7 }} /> Exp</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 48 }}>
+              {monthData.map((m,i) => (
+                <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                  <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 36, width: "100%" }}>
+                    <div style={{ flex: 1, borderRadius: "3px 3px 0 0", background: `${t.inc}90`, height: Math.max(2, (m.inc/maxBar)*36), transition: "height 0.4s ease", minHeight: m.inc > 0 ? 3 : 0 }} />
+                    <div style={{ flex: 1, borderRadius: "3px 3px 0 0", background: `${t.exp}90`, height: Math.max(2, (m.exp/maxBar)*36), transition: "height 0.4s ease", minHeight: m.exp > 0 ? 3 : 0 }} />
+                  </div>
+                  <div style={{ fontSize: 8, color: t.textDim, fontWeight: 500, marginTop: 2 }}>{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 9, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Cash Flow Trend</div>
+            <svg width="100%" height={lineH} viewBox={`0 0 180 ${lineH}`} preserveAspectRatio="none">
+              {minNet < 0 && <line x1="8" y1={lineH - 4 - ((0 - minNet)/netRange)*(lineH-8)} x2="172" y2={lineH - 4 - ((0 - minNet)/netRange)*(lineH-8)} stroke={t.textDim} strokeWidth="0.5" strokeDasharray="3,3" opacity="0.4" />}
+              <defs>
+                <linearGradient id="cashFlowGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={t.inc} stopOpacity="0.2" />
+                  <stop offset="100%" stopColor={t.inc} stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <polygon points={`8,${lineH-4} ${linePoints} 172,${lineH-4}`} fill="url(#cashFlowGrad)" />
+              <polyline points={linePoints} fill="none" stroke={t.inc} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+              {monthData.map((m,i) => {
+                const x = 8 + (i / Math.max(monthData.length-1,1)) * 164;
+                const y = lineH - 4 - ((m.net - minNet) / netRange) * (lineH - 8);
+                return <circle key={i} cx={x} cy={y} r="2.5" fill={m.net >= 0 ? t.inc : t.exp} stroke={t.id==="midnight"?"#0a0a1a":"#021a1a"} strokeWidth="1" />;
+              })}
+            </svg>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+              <span style={{ fontSize: 8, color: t.textDim }}>{months[0].label}</span>
+              <span style={{ fontSize: 9, color: nets[nets.length-1] >= 0 ? t.inc : t.exp, fontWeight: 600, fontFamily: t.mono }}>
+                {nets[nets.length-1] >= 0 ? "+" : ""}{nets[nets.length-1] >= 1000 || nets[nets.length-1] <= -1000 ? `$${(nets[nets.length-1]/1000).toFixed(1)}k` : `$${nets[nets.length-1].toFixed(0)}`}
+              </span>
+              <span style={{ fontSize: 8, color: t.textDim }}>{months[months.length-1].label}</span>
+            </div>
+          </div>
+        </div>
+      );
+    })();
+
     // Bottom navigation bar
     const bottomNav = (
       <div style={{
@@ -2742,6 +2906,7 @@ ${context}`;
         {[
           { id: "home", icon: "🏠", label: "Home" },
           { id: "budgets", icon: "📂", label: "Budgets" },
+          { id: "charts", icon: "📈", label: "Charts" },
           { id: "accounts", icon: "🏦", label: "Accounts" },
           { id: "settings", icon: "⚙️", label: "Settings" },
         ].map(tab => (
@@ -2774,6 +2939,23 @@ ${context}`;
           {settingsPanel}
           {folderList}
           <div style={{ height: 24 }} />
+        </div>
+      );
+    }
+
+    // Tab content: Charts (Financial Overview)
+    if (activeTab === "charts") {
+      return shell(
+        <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+            <button onClick={() => { setActiveTab("home"); setShowSettings(false); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text, flex: 1 }}>Charts</h1>
+            <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? `${t.accent}20` : t.surface, border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10, width: 36, height: 36, cursor: "pointer", fontSize: 18, color: showSettings ? t.accentLight : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>⚙</button>
+          </div>
+          {settingsPanel}
+          {chartsHero}
+          <div style={{ flex: 1 }} />
+          {bottomNav}
         </div>
       );
     }
@@ -2824,163 +3006,6 @@ ${context}`;
           </div>
           <div style={{ fontSize: 32, fontWeight: 700, color: t.text, marginTop: 4 }}><AnimatedCurrency value={totalBalance} /></div>
         </div>
-
-        {/* Financial Charts Hero Banner */}
-        {(() => {
-          const now = new Date();
-          const months = [];
-          for (let i = 5; i >= 0; i--) {
-            const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            months.push({ key: `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`, label: dt.toLocaleDateString("en-US",{month:"short"}) });
-          }
-          const allE = d.entries || [];
-          const monthData = months.map(m => {
-            const me = allE.filter(e => (e.dateISO||"").startsWith(m.key));
-            const inc = me.filter(e => e.type==="income").reduce((s,e)=>s+(e.amount||0),0);
-            const exp = me.filter(e => e.type==="expense" && e.paid!==false).reduce((s,e)=>s+(e.amount||0),0);
-            return { ...m, inc, exp, net: inc - exp };
-          });
-          const hasData = monthData.some(m => m.inc > 0 || m.exp > 0);
-
-          // Category breakdown for current month
-          const curKey = months[months.length-1].key;
-          const curExp = allE.filter(e => e.type==="expense" && e.paid!==false && (e.dateISO||"").startsWith(curKey));
-          const cats = allCats();
-          const catMap = {};
-          curExp.forEach(e => { const cid = e.category||"other"; catMap[cid] = (catMap[cid]||0) + (e.amount||0); });
-          const catData = Object.entries(catMap).map(([id,total]) => {
-            const c = cats.find(x=>x.id===id) || {label:"Other",color:"#94a3b8"};
-            return { id, label: c.label, color: c.color, total };
-          }).sort((a,b)=>b.total-a.total).slice(0,6);
-          const catTotal = catData.reduce((s,c)=>s+c.total,0);
-
-          // Bar chart scaling
-          const maxBar = Math.max(...monthData.map(m => Math.max(m.inc, m.exp)), 1);
-
-          // Cash flow line scaling
-          const nets = monthData.map(m => m.net);
-          const minNet = Math.min(...nets, 0);
-          const maxNet = Math.max(...nets, 1);
-          const netRange = (maxNet - minNet) || 1;
-          const lineH = 50;
-          const linePoints = monthData.map((m,i) => {
-            const x = 8 + (i / Math.max(monthData.length-1,1)) * 164;
-            const y = lineH - 4 - ((m.net - minNet) / netRange) * (lineH - 8);
-            return `${x},${y}`;
-          }).join(" ");
-
-          if (!hasData) {
-            return (
-              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 16, padding: "20px 18px", marginBottom: 20, textAlign: "center" }}>
-                <div style={{ fontSize: 28, marginBottom: 8 }}>📈</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>Financial Overview</div>
-                <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>Add transactions with dates to see your charts here</div>
-              </div>
-            );
-          }
-
-          return (
-            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 16, padding: "16px 16px 12px", marginBottom: 20, animation: "fadeIn 0.5s ease" }}>
-              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 12, paddingLeft: 2 }}>Financial Overview</div>
-
-              <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
-                {/* Donut Chart — Spending by Category */}
-                <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center" }}>
-                  <svg width="90" height="90" viewBox="0 0 90 90">
-                    {(() => {
-                      if (catData.length === 0) return <circle cx="45" cy="45" r="32" fill="none" stroke={t.cardBorder} strokeWidth="8" />;
-                      const slices = [];
-                      let cumAngle = -90;
-                      catData.forEach((c, i) => {
-                        const pct = c.total / catTotal;
-                        const angle = pct * 360;
-                        const gap = catData.length > 1 ? 3 : 0;
-                        const startA = cumAngle + gap/2;
-                        const endA = cumAngle + angle - gap/2;
-                        const largeArc = (endA - startA) > 180 ? 1 : 0;
-                        const r = 32;
-                        const sx = 45 + r * Math.cos(startA * Math.PI/180);
-                        const sy = 45 + r * Math.sin(startA * Math.PI/180);
-                        const ex = 45 + r * Math.cos(endA * Math.PI/180);
-                        const ey = 45 + r * Math.sin(endA * Math.PI/180);
-                        if (angle > 1) {
-                          slices.push(<path key={i} d={`M${sx},${sy} A${r},${r} 0 ${largeArc} 1 ${ex},${ey}`} fill="none" stroke={c.color} strokeWidth="8" strokeLinecap="round" opacity="0.85" />);
-                        }
-                        cumAngle += angle;
-                      });
-                      return slices;
-                    })()}
-                    <text x="45" y="42" textAnchor="middle" fill={t.text} fontSize="11" fontWeight="700" fontFamily={t.font}>{catTotal >= 1000 ? `$${(catTotal/1000).toFixed(1)}k` : `$${catTotal.toFixed(0)}`}</text>
-                    <text x="45" y="54" textAnchor="middle" fill={t.textMuted} fontSize="7" fontWeight="500" fontFamily={t.font}>spent</text>
-                  </svg>
-                </div>
-
-                {/* Category Legend */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 3, minWidth: 0 }}>
-                  {catData.slice(0,5).map(c => (
-                    <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: c.color, flexShrink: 0, opacity: 0.85 }} />
-                      <div style={{ fontSize: 10, color: t.textSub, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</div>
-                      <div style={{ fontSize: 10, color: t.text, fontWeight: 600, fontFamily: t.mono, flexShrink: 0 }}>{c.total >= 1000 ? `$${(c.total/1000).toFixed(1)}k` : `$${c.total.toFixed(0)}`}</div>
-                    </div>
-                  ))}
-                  {catData.length > 5 && <div style={{ fontSize: 9, color: t.textMuted }}>+{catData.length-5} more</div>}
-                </div>
-              </div>
-
-              {/* Income vs Expenses Bars */}
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 9, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6, display: "flex", alignItems: "center", gap: 10 }}>
-                  <span>Income vs Expenses</span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 3, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: t.inc, opacity: 0.7 }} /> Inc</span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 3, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: t.exp, opacity: 0.7 }} /> Exp</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 48 }}>
-                  {monthData.map((m,i) => (
-                    <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                      <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 36, width: "100%" }}>
-                        <div style={{ flex: 1, borderRadius: "3px 3px 0 0", background: `${t.inc}90`, height: Math.max(2, (m.inc/maxBar)*36), transition: "height 0.4s ease", minHeight: m.inc > 0 ? 3 : 0 }} />
-                        <div style={{ flex: 1, borderRadius: "3px 3px 0 0", background: `${t.exp}90`, height: Math.max(2, (m.exp/maxBar)*36), transition: "height 0.4s ease", minHeight: m.exp > 0 ? 3 : 0 }} />
-                      </div>
-                      <div style={{ fontSize: 8, color: t.textDim, fontWeight: 500, marginTop: 2 }}>{m.label}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Cash Flow Trend Line */}
-              <div>
-                <div style={{ fontSize: 9, color: t.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Cash Flow Trend</div>
-                <svg width="100%" height={lineH} viewBox={`0 0 180 ${lineH}`} preserveAspectRatio="none">
-                  {/* Zero line */}
-                  {minNet < 0 && <line x1="8" y1={lineH - 4 - ((0 - minNet)/netRange)*(lineH-8)} x2="172" y2={lineH - 4 - ((0 - minNet)/netRange)*(lineH-8)} stroke={t.textDim} strokeWidth="0.5" strokeDasharray="3,3" opacity="0.4" />}
-                  {/* Gradient fill */}
-                  <defs>
-                    <linearGradient id="cashFlowGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={t.inc} stopOpacity="0.2" />
-                      <stop offset="100%" stopColor={t.inc} stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-                  <polygon points={`8,${lineH-4} ${linePoints} 172,${lineH-4}`} fill="url(#cashFlowGrad)" />
-                  <polyline points={linePoints} fill="none" stroke={t.inc} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
-                  {/* Data points */}
-                  {monthData.map((m,i) => {
-                    const x = 8 + (i / Math.max(monthData.length-1,1)) * 164;
-                    const y = lineH - 4 - ((m.net - minNet) / netRange) * (lineH - 8);
-                    return <circle key={i} cx={x} cy={y} r="2.5" fill={m.net >= 0 ? t.inc : t.exp} stroke={t.id==="midnight"?"#0a0a1a":"#021a1a"} strokeWidth="1" />;
-                  })}
-                </svg>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                  <span style={{ fontSize: 8, color: t.textDim }}>{months[0].label}</span>
-                  <span style={{ fontSize: 9, color: nets[nets.length-1] >= 0 ? t.inc : t.exp, fontWeight: 600, fontFamily: t.mono }}>
-                    {nets[nets.length-1] >= 0 ? "+" : ""}{nets[nets.length-1] >= 1000 || nets[nets.length-1] <= -1000 ? `$${(nets[nets.length-1]/1000).toFixed(1)}k` : `$${nets[nets.length-1].toFixed(0)}`}
-                  </span>
-                  <span style={{ fontSize: 8, color: t.textDim }}>{months[months.length-1].label}</span>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
 
         {/* 2x2 Hero Grid */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
@@ -3064,10 +3089,20 @@ ${context}`;
           );
         })()}
 
-        {/* Recent Activity */}
+        {/* Around This Time — transactions within ±7 days of today */}
         {recentEntries.length > 0 && (
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 8, paddingLeft: 2 }}>Recent Activity</div>
+            <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 8, paddingLeft: 2, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>Around This Time</span>
+              <span style={{ fontWeight: 400, letterSpacing: "0.04em", textTransform: "none", color: t.textDim }}>
+                {(() => {
+                  const start = new Date(todayMs - windowMs);
+                  const end = new Date(todayMs + windowMs);
+                  const fmtMD = dt => dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                  return `${fmtMD(start)} – ${fmtMD(end)}`;
+                })()}
+              </span>
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               {recentEntries.map(entry => (
                 <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, transition: "background 0.15s" }}
