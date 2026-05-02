@@ -215,7 +215,7 @@ function useConnectionStatus() {
   return online;
 }
 
-const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {} };
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {}, nwItems: [] };
 
 function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
@@ -233,7 +233,7 @@ function useApp(user, householdId) {
       if (skipNextRemote.current) { skipNextRemote.current = false; return; }
       if (snap.exists()) {
         const r = snap.data();
-        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], customCategories: r.customCategories||[], savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{} }));
+        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], customCategories: r.customCategories||[], savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{}, nwItems: r.nwItems||[] }));
       }
       setSynced(true);
     }, () => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {} setSynced(true); });
@@ -299,6 +299,15 @@ function useApp(user, householdId) {
     addSavingsGoal: useCallback(g => up(p => ({ ...p, savingsGoals: [...(p.savingsGoals||[]), g] })), []),
     updateSavingsGoal: useCallback((id, u) => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).map(g => g.id === id ? { ...g, ...u } : g) })), []),
     removeSavingsGoal: useCallback(id => up(p => ({ ...p, savingsGoals: (p.savingsGoals||[]).filter(g => g.id !== id) })), []),
+    addNwItem: useCallback(item => up(p => ({ ...p, nwItems: [...(p.nwItems||[]), item] })), []),
+    updateNwItem: useCallback((id, u) => up(p => ({ ...p, nwItems: (p.nwItems||[]).map(i => i.id === id ? { ...i, ...u } : i) })), []),
+    removeNwItem: useCallback(id => up(p => ({ ...p, nwItems: (p.nwItems||[]).filter(i => i.id !== id) })), []),
+    importNwItems: useCallback(items => up(p => {
+      const existingIds = new Set((p.nwItems||[]).map(i => i.id));
+      const fresh = items.filter(i => !existingIds.has(i.id));
+      if (fresh.length === 0) return p;
+      return { ...p, nwItems: [...(p.nwItems||[]), ...fresh] };
+    }), []),
     setBankAccount: useCallback((nodeId, data) => up(p => ({ ...p, bankAccount: { ...(p.bankAccount||{}), [nodeId]: data } })), []),
     removeBankAccount: useCallback(nodeId => up(p => { const ba = { ...(p.bankAccount||{}) }; delete ba[nodeId]; return { ...p, bankAccount: ba }; }), []),
     // Per-node bank accounts (array of accounts per budget node)
@@ -1679,9 +1688,10 @@ export default function App({ user, householdId }) {
   const [advisorMessages, setAdvisorMessages] = useState(() => { try { const s = localStorage.getItem("maverick-advisor-msgs"); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [advisorInput, setAdvisorInput] = useState("");
   const [advisorLoading, setAdvisorLoading] = useState(false);
-  const [nwItems, setNwItems] = useState(() => { try { const s = localStorage.getItem("maverick-nw-items"); return s ? JSON.parse(s) : []; } catch { return []; } });
+  const nwItems = d.nwItems || [];
   const [addingNwItem, setAddingNwItem] = useState(null); // "asset" | "liability" | null
   const [editingNwItem, setEditingNwItem] = useState(null);
+  const [editingBankAcct, setEditingBankAcct] = useState(null); // "{nodeId}:{acctId}" or null
   const [advisorTab, setAdvisorTab] = useState("chat"); // "chat" | "debt" | "whatif" | "bills"
   const [debtExtra, setDebtExtra] = useState("100"); // extra monthly payment for debt payoff
   const [debtStrategy, setDebtStrategy] = useState("avalanche"); // "avalanche" | "snowball"
@@ -1706,12 +1716,28 @@ export default function App({ user, householdId }) {
   const goBack = () => setNavStack(navStack.slice(0, -1));
   const goHome = () => { setNavStack([]); setActiveTab("home"); setShowNetWorth(false); setShowAdvisor(false); setShowBillCalendar(false); setGlobalSearch(""); };
 
-  // Persist net worth items and advisor messages
-  useEffect(() => { try { localStorage.setItem("maverick-nw-items", JSON.stringify(nwItems)); } catch {} }, [nwItems]);
+  // Persist advisor messages
   useEffect(() => { try { localStorage.setItem("maverick-advisor-msgs", JSON.stringify(advisorMessages.slice(-50))); } catch {} }, [advisorMessages]);
-  const addNwItem = (item) => setNwItems(prev => [...prev, { id: uid(), ...item, createdAt: new Date().toISOString() }]);
-  const updateNwItem = (id, updates) => setNwItems(prev => prev.map(i => i.id === id ? { ...i, ...updates } : i));
-  const removeNwItem = (id) => setNwItems(prev => prev.filter(i => i.id !== id));
+  const addNwItem = (item) => app.addNwItem({ id: uid(), createdAt: new Date().toISOString(), ...item });
+  const updateNwItem = (id, updates) => app.updateNwItem(id, updates);
+  const removeNwItem = (id) => app.removeNwItem(id);
+
+  // One-time migration: move any pre-existing local-only nw items into the synced doc, then clear localStorage.
+  // Wait until the first Firestore snapshot has loaded so we don't overwrite a remote that already has them.
+  const nwMigrated = useRef(false);
+  useEffect(() => {
+    if (!synced || nwMigrated.current) return;
+    nwMigrated.current = true;
+    try {
+      const raw = localStorage.getItem("maverick-nw-items");
+      if (!raw) return;
+      const legacy = JSON.parse(raw);
+      if (Array.isArray(legacy) && legacy.length > 0) {
+        app.importNwItems(legacy); // de-dupes by id
+      }
+      localStorage.removeItem("maverick-nw-items");
+    } catch {}
+  }, [synced]);
 
   // ── Net Worth helpers ──
   const getAllBankAccounts = () => {
@@ -2101,6 +2127,75 @@ export default function App({ user, householdId }) {
     const totalLiabilities = bankNw.liabilities + manualLiabilities.reduce((s, i) => s + (i.value || 0), 0);
     const netWorth = totalAssets - totalLiabilities;
 
+    // Inline form for editing an existing bank account from the Net Worth page.
+    // Writes through to the underlying budget folder via app.updateBankAccount.
+    const BankAcctEditForm = ({ acct, onDone }) => {
+      const isLiab = LIABILITY_TYPES.has(acct.type);
+      const [name, setName] = useState(acct.name || "");
+      const [type, setType] = useState(acct.type || (isLiab ? "credit" : "checking"));
+      const [balance, setBalance] = useState(String(Math.abs(acct.balance || 0)));
+      const [rate, setRate] = useState(acct.rate != null ? String(acct.rate) : "");
+      const [minPayment, setMinPayment] = useState(acct.minPayment != null ? String(acct.minPayment) : "");
+      const groupTypes = ACCOUNT_TYPES.filter(at => at.group === (isLiab ? "liability" : "asset"));
+      const save = () => {
+        const updates = { name: name.trim() || acct.name, type, balance: parseFloat(balance) || 0 };
+        if (LIABILITY_TYPES.has(type)) {
+          updates.rate = parseFloat(rate) || 0;
+          updates.minPayment = parseFloat(minPayment) || 0;
+        }
+        app.updateBankAccount(acct._nodeId, acct.id, updates);
+        haptic();
+        onDone();
+      };
+      return (
+        <div style={{ padding: "12px 14px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, marginBottom: 8, animation: "slideIn 0.2s ease" }}>
+          <div style={{ fontSize: 10, color: t.textMuted, marginBottom: 6 }}>From budget: <span style={{ color: t.textSub }}>{acct._nodeName}</span></div>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Account name" style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, marginBottom: 8, outline: "none" }} autoFocus />
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <select value={type} onChange={e => setType(e.target.value)} style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 13 }}>
+              {groupTypes.map(at => <option key={at.id} value={at.id}>{at.icon} {at.label}</option>)}
+            </select>
+            <input value={balance} onChange={e => setBalance(e.target.value)} placeholder="Balance" type="number" step="0.01" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 14, textAlign: "right" }} />
+          </div>
+          {LIABILITY_TYPES.has(type) && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <input value={rate} onChange={e => setRate(e.target.value)} placeholder="APR %" type="number" step="0.1" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 13, textAlign: "center" }} />
+              <input value={minPayment} onChange={e => setMinPayment(e.target.value)} placeholder="Min payment" type="number" step="1" inputMode="decimal" style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: t.inputBg, color: t.text, fontSize: 13, textAlign: "center" }} />
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onDone} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: `1px solid ${t.cardBorder}`, background: "transparent", color: t.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            <button onClick={save} style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", background: t.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save</button>
+          </div>
+        </div>
+      );
+    };
+
+    // Render a bank-account-derived row (asset or liability). Clickable to edit, with a remove button.
+    const renderBankAcct = (a, group) => {
+      const key = `${a._nodeId}:${a.id}`;
+      if (editingBankAcct === key) return <BankAcctEditForm key={key} acct={a} onDone={() => setEditingBankAcct(null)} />;
+      const isLiab = group === "liability";
+      const ti = ACCOUNT_TYPES.find(at => at.id === a.type) || {};
+      return (
+        <div key={`bank-${a.id}`} onClick={() => { setEditingBankAcct(key); haptic(); }} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, cursor: "pointer", transition: "background 0.15s" }}
+          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 16 }}>{ti.icon || (isLiab ? "💳" : "🏦")}</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{a.name}</div>
+              <div style={{ fontSize: 10, color: t.textMuted }}>from {a._nodeName}</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: isLiab ? t.exp : t.inc, fontFamily: t.mono }}>{isLiab ? "-" : ""}{fmt(Math.abs(a.balance || 0))}</span>
+            <button onClick={e => { e.stopPropagation(); if (confirm(`Remove "${a.name}" from ${a._nodeName}?`)) { app.removeBankAccountFromNode(a._nodeId, a.id); if (editingBankAcct === key) setEditingBankAcct(null); haptic(15); } }} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 14, padding: "2px 4px" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = "#475569"}>×</button>
+          </div>
+        </div>
+      );
+    };
+
     const renderNwItem = (item) => {
       const ti = ACCOUNT_TYPES.find(at => at.id === item.category) || {};
       const isLiab = item.group === "liability";
@@ -2167,15 +2262,7 @@ export default function App({ user, householdId }) {
           </div>
           {addingNwItem === "asset" && <NwItemForm group="asset" onSave={(item) => { addNwItem(item); setAddingNwItem(null); haptic(); }} onCancel={() => setAddingNwItem(null)} />}
           {manualAssets.map(renderNwItem)}
-          {allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).map(a => (
-            <div key={`bank-${a.id}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, opacity: 0.7 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 16 }}>{(ACCOUNT_TYPES.find(at => at.id === a.type))?.icon || "🏦"}</span>
-                <div><div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{a.name}</div><div style={{ fontSize: 10, color: t.textMuted }}>from {a._nodeName}</div></div>
-              </div>
-              <span style={{ fontSize: 14, fontWeight: 600, color: t.inc, fontFamily: t.mono }}>{fmt(a.balance || 0)}</span>
-            </div>
-          ))}
+          {allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).map(a => renderBankAcct(a, "asset"))}
           {manualAssets.length === 0 && allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>Tap + Add to add your first asset</div>}
         </div>
 
@@ -2187,15 +2274,7 @@ export default function App({ user, householdId }) {
           </div>
           {addingNwItem === "liability" && <NwItemForm group="liability" onSave={(item) => { addNwItem(item); setAddingNwItem(null); haptic(); }} onCancel={() => setAddingNwItem(null)} />}
           {manualLiabilities.map(renderNwItem)}
-          {allAccts.filter(a => LIABILITY_TYPES.has(a.type)).map(a => (
-            <div key={`bank-${a.id}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, opacity: 0.7 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 16 }}>{(ACCOUNT_TYPES.find(at => at.id === a.type))?.icon || "💳"}</span>
-                <div><div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{a.name}</div><div style={{ fontSize: 10, color: t.textMuted }}>from {a._nodeName}</div></div>
-              </div>
-              <span style={{ fontSize: 14, fontWeight: 600, color: t.exp, fontFamily: t.mono }}>-{fmt(Math.abs(a.balance || 0))}</span>
-            </div>
-          ))}
+          {allAccts.filter(a => LIABILITY_TYPES.has(a.type)).map(a => renderBankAcct(a, "liability"))}
           {manualLiabilities.length === 0 && allAccts.filter(a => LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>Tap + Add to add your first liability</div>}
         </div>
       </div>
