@@ -198,15 +198,29 @@ function parseCSV(text) {
 }
 
 // ── State with Firebase Sync ──
-import { db, auth, signOut, doc, setDoc, onSnapshot, collection, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS, getDisplayPrefs, setDisplayPrefs, DEFAULT_DISPLAY_PREFS } from "./firebase";
+import { db, auth, signOut, doc, setDoc, onSnapshot, collection, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS, getDisplayPrefs, setDisplayPrefs, DEFAULT_DISPLAY_PREFS, waitForPendingWrites } from "./firebase";
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
+
+// Tracks online/offline status and whether there are pending Firestore writes
+function useConnectionStatus() {
+  const [online, setOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  useEffect(() => {
+    const onUp = () => setOnline(true);
+    const onDown = () => setOnline(false);
+    window.addEventListener("online", onUp);
+    window.addEventListener("offline", onDown);
+    return () => { window.removeEventListener("online", onUp); window.removeEventListener("offline", onDown); };
+  }, []);
+  return online;
+}
 
 const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {} };
 
 function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
   const [synced, setSynced] = useState(false);
+  const [pendingWrites, setPendingWrites] = useState(false);
   const saveTimer = useRef(null);
   const skipNextRemote = useRef(false);
   const docRef = householdId ? doc(db, "households", householdId, "data", "budget") : null;
@@ -229,13 +243,24 @@ function useApp(user, householdId) {
   const saveToCloud = useCallback((data) => {
     try { localStorage.setItem("maverick-budget-data", JSON.stringify(data)); } catch {}
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { if (docRef) { skipNextRemote.current = true; setDoc(docRef, { ...data, updatedAt: new Date().toISOString(), updatedBy: user?.email||"unknown" }).catch(e => console.error("Save:",e)); } }, 500);
+    setPendingWrites(true);
+    saveTimer.current = setTimeout(() => {
+      if (docRef) {
+        skipNextRemote.current = true;
+        // setDoc resolves once the write reaches the server (or is queued in the local cache while offline).
+        // waitForPendingWrites then resolves only after all queued writes have actually been acknowledged by the server.
+        setDoc(docRef, { ...data, updatedAt: new Date().toISOString(), updatedBy: user?.email||"unknown" }).catch(e => console.error("Save:",e));
+        waitForPendingWrites(db).then(() => setPendingWrites(false)).catch(() => {});
+      } else {
+        setPendingWrites(false);
+      }
+    }, 500);
   }, [docRef, user]);
 
   const up = fn => setD(p => { const next = fn(p); saveToCloud(next); return next; });
   const getDesc = useCallback((nodes, nid) => { const kids = nodes.filter(n => n.parentId === nid); let all = kids.map(k => k.id); kids.forEach(k => { all = all.concat(getDesc(nodes, k.id)); }); return all; }, []);
   return {
-    d, synced,
+    d, synced, pendingWrites,
     cats: getCats(d.customCategories),
     addNode: useCallback(n => up(p => ({ ...p, nodes: [...p.nodes, n] })), []),
     updateNode: useCallback((id, u) => up(p => ({ ...p, nodes: p.nodes.map(n => n.id === id ? { ...n, ...u } : n) })), []),
@@ -1638,7 +1663,8 @@ function NodePage({ node, parentName, nodes, entries, customCategories, displayP
 // ══════════════════════════════════════════════════
 export default function App({ user, householdId }) {
   const app = useApp(user, householdId);
-  const { d, synced } = app;
+  const { d, synced, pendingWrites } = app;
+  const online = useConnectionStatus();
   const [navStack, setNavStack] = useState([]);
   const [addingRoot, setAddingRoot] = useState(false);
   const [showArchivedRoot, setShowArchivedRoot] = useState(false);
@@ -1646,6 +1672,10 @@ export default function App({ user, householdId }) {
   const [activeTab, setActiveTab] = useState("home");
   const [showNetWorth, setShowNetWorth] = useState(false);
   const [showAdvisor, setShowAdvisor] = useState(false);
+  const [showBillCalendar, setShowBillCalendar] = useState(false);
+  const [billCalMonth, setBillCalMonth] = useState(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
+  const [billCalSelectedDay, setBillCalSelectedDay] = useState(null); // ISO date string
+  const [globalSearch, setGlobalSearch] = useState("");
   const [advisorMessages, setAdvisorMessages] = useState(() => { try { const s = localStorage.getItem("maverick-advisor-msgs"); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [advisorInput, setAdvisorInput] = useState("");
   const [advisorLoading, setAdvisorLoading] = useState(false);
@@ -1674,7 +1704,7 @@ export default function App({ user, householdId }) {
   const par = navStack.length >= 2 ? d.nodes.find(n => n.id === navStack[navStack.length - 2]) : null;
   const goTo = nid => setNavStack([...navStack, nid]);
   const goBack = () => setNavStack(navStack.slice(0, -1));
-  const goHome = () => { setNavStack([]); setActiveTab("home"); setShowNetWorth(false); setShowAdvisor(false); };
+  const goHome = () => { setNavStack([]); setActiveTab("home"); setShowNetWorth(false); setShowAdvisor(false); setShowBillCalendar(false); setGlobalSearch(""); };
 
   // Persist net worth items and advisor messages
   useEffect(() => { try { localStorage.setItem("maverick-nw-items", JSON.stringify(nwItems)); } catch {} }, [nwItems]);
@@ -1845,6 +1875,221 @@ export default function App({ user, householdId }) {
       </div>
     );
   };
+
+  // ── Bill Calendar Page ──
+  if (showBillCalendar && !cur) {
+    const [yStr, mStr] = billCalMonth.split("-");
+    const year = parseInt(yStr, 10);
+    const month = parseInt(mStr, 10) - 1; // 0-indexed
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startWeekday = firstDay.getDay(); // 0 = Sun
+
+    // All expense entries falling in this month, grouped by day
+    const monthPrefix = billCalMonth + "-";
+    const monthExpenses = (d.entries || []).filter(e =>
+      e.type === "expense" && (e.dateISO || "").startsWith(monthPrefix)
+    );
+    const cats = allCats();
+    const nodeById = id => d.nodes.find(n => n.id === id);
+    const folderOf = nid => { let n = nodeById(nid); while (n?.parentId) n = nodeById(n.parentId); return n; };
+    const byDay = {};
+    monthExpenses.forEach(e => {
+      const day = parseInt((e.dateISO || "").slice(8, 10), 10);
+      if (!day) return;
+      if (!byDay[day]) byDay[day] = [];
+      byDay[day].push(e);
+    });
+
+    // Month-level totals
+    const monthPaid = monthExpenses.filter(e => e.paid !== false).reduce((s, e) => s + (e.amount || 0), 0);
+    const monthUnpaid = monthExpenses.filter(e => e.paid === false).reduce((s, e) => s + (e.amount || 0), 0);
+
+    // Today + this-week unpaid count for the header strip
+    const today = new Date();
+    const todayISO = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    const weekFromNow = new Date(today.getTime() + 7 * 86400000);
+    const weekFromNowISO = `${weekFromNow.getFullYear()}-${String(weekFromNow.getMonth()+1).padStart(2,"0")}-${String(weekFromNow.getDate()).padStart(2,"0")}`;
+    const dueThisWeek = (d.entries || []).filter(e =>
+      e.type === "expense" && e.paid === false && e.dateISO && e.dateISO >= todayISO && e.dateISO <= weekFromNowISO
+    );
+
+    const monthLabel = firstDay.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+    const shiftMonth = (delta) => {
+      const dt = new Date(year, month + delta, 1);
+      setBillCalMonth(`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`);
+      setBillCalSelectedDay(null);
+      haptic();
+    };
+
+    // Build the 6×7 grid (always 42 cells so layout doesn't jump)
+    const cells = [];
+    for (let i = 0; i < startWeekday; i++) cells.push(null);
+    for (let dn = 1; dn <= daysInMonth; dn++) cells.push(dn);
+    while (cells.length < 42) cells.push(null);
+
+    const selectedISO = billCalSelectedDay;
+    const selectedEntries = selectedISO ? (byDay[parseInt(selectedISO.slice(8, 10), 10)] || []) : [];
+
+    return shell(
+      <div style={{ padding: "24px 20px 100px", animation: "fadeIn 0.4s ease" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+          <button onClick={() => { goHome(); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
+          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text, flex: 1 }}>Bills</h1>
+        </div>
+
+        {/* This-week unpaid summary */}
+        {dueThisWeek.length > 0 && (
+          <div style={{ background: `${t.exp}10`, border: `1px solid ${t.exp}30`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 18 }}>⏰</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{dueThisWeek.length} bill{dueThisWeek.length === 1 ? "" : "s"} due this week</div>
+              <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>Total: {fmt(dueThisWeek.reduce((s, e) => s + (e.amount || 0), 0))}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Month nav */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, padding: "0 4px" }}>
+          <button onClick={() => shiftMonth(-1)} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 8, width: 36, height: 36, cursor: "pointer", fontSize: 16 }}>‹</button>
+          <div style={{ fontSize: 16, fontWeight: 700, color: t.text }}>{monthLabel}</div>
+          <button onClick={() => shiftMonth(1)} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 8, width: 36, height: 36, cursor: "pointer", fontSize: 16 }}>›</button>
+        </div>
+
+        {/* Month totals */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <div style={{ flex: 1, background: `${t.inc}10`, border: `1px solid ${t.inc}25`, borderRadius: 10, padding: "8px 12px" }}>
+            <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>Paid</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: t.inc, fontFamily: t.mono, marginTop: 2 }}>{fmt(monthPaid)}</div>
+          </div>
+          <div style={{ flex: 1, background: `${t.exp}10`, border: `1px solid ${t.exp}25`, borderRadius: 10, padding: "8px 12px" }}>
+            <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>Unpaid</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: t.exp, fontFamily: t.mono, marginTop: 2 }}>{fmt(monthUnpaid)}</div>
+          </div>
+        </div>
+
+        {/* Weekday header */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
+          {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+            <div key={i} style={{ textAlign: "center", fontSize: 9, color: t.textMuted, fontWeight: 600, letterSpacing: "0.08em" }}>{d}</div>
+          ))}
+        </div>
+
+        {/* Calendar grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 16 }}>
+          {cells.map((dn, idx) => {
+            if (dn === null) return <div key={idx} style={{ aspectRatio: "1 / 1" }} />;
+            const dayISO = `${billCalMonth}-${String(dn).padStart(2, "0")}`;
+            const entries = byDay[dn] || [];
+            const hasUnpaid = entries.some(e => e.paid === false);
+            const hasPaid = entries.some(e => e.paid !== false);
+            const isToday = dayISO === todayISO;
+            const isSelected = dayISO === selectedISO;
+            const dayTotal = entries.reduce((s, e) => s + (e.amount || 0), 0);
+
+            // Color logic: red = any unpaid, green = all paid, neutral = no bills
+            const accentColor = hasUnpaid ? t.exp : hasPaid ? t.inc : null;
+
+            return (
+              <button
+                key={idx}
+                onClick={() => { setBillCalSelectedDay(isSelected ? null : dayISO); haptic(); }}
+                style={{
+                  aspectRatio: "1 / 1",
+                  background: isSelected ? `${t.accent}25` : entries.length > 0 ? `${accentColor}12` : "rgba(255,255,255,0.02)",
+                  border: isSelected ? `2px solid ${t.accent}` : isToday ? `1px solid ${t.accent}60` : `1px solid ${entries.length > 0 ? accentColor + "30" : t.cardBorder}`,
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  padding: 4,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  position: "relative",
+                  transition: "all 0.15s",
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: isToday ? 700 : 500, color: isToday ? t.accent : t.text, alignSelf: "flex-start" }}>{dn}</div>
+                {entries.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, width: "100%" }}>
+                    <div style={{ display: "flex", gap: 2, justifyContent: "center" }}>
+                      {hasUnpaid && <span style={{ width: 5, height: 5, borderRadius: "50%", background: t.exp }} />}
+                      {hasPaid && <span style={{ width: 5, height: 5, borderRadius: "50%", background: t.inc }} />}
+                    </div>
+                    <div style={{ fontSize: 8, color: t.textMuted, fontFamily: t.mono, lineHeight: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                      {dayTotal >= 1000 ? `$${(dayTotal/1000).toFixed(1)}k` : `$${Math.round(dayTotal)}`}
+                    </div>
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Legend */}
+        <div style={{ display: "flex", gap: 14, justifyContent: "center", marginBottom: 16, fontSize: 10, color: t.textMuted }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: t.exp }} /> Unpaid</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: t.inc }} /> Paid</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: "transparent", border: `1px solid ${t.accent}` }} /> Today</span>
+        </div>
+
+        {/* Selected day details */}
+        {selectedISO && (
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "14px 16px", animation: "fadeIn 0.2s ease" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>{new Date(selectedISO + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</div>
+              <button onClick={() => { setBillCalSelectedDay(null); haptic(); }} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 18, padding: 0, lineHeight: 1 }}>×</button>
+            </div>
+            {selectedEntries.length === 0 ? (
+              <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>No bills on this day.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {selectedEntries.map(entry => {
+                  const cat = cats.find(c => c.id === entry.category);
+                  const folder = folderOf(entry.nodeId);
+                  const node = nodeById(entry.nodeId);
+                  const unpaid = entry.paid === false;
+                  return (
+                    <div key={entry.id} onClick={() => {
+                      if (entry.nodeId) {
+                        const owner = nodeById(entry.nodeId);
+                        if (owner) {
+                          const stack = [];
+                          let cur = owner;
+                          while (cur) { stack.unshift(cur.id); cur = cur.parentId ? nodeById(cur.parentId) : null; }
+                          setNavStack(stack);
+                          setShowBillCalendar(false);
+                          haptic();
+                        }
+                      }
+                    }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 10, cursor: "pointer", borderLeft: `3px solid ${unpaid ? t.exp : t.inc}` }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 14 }}>
+                        {cat ? cat.icon : "📋"}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
+                        <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {folder?.name || "—"}
+                          {node && node.id !== folder?.id ? ` › ${node.name}` : ""}
+                          {unpaid ? " · UNPAID" : " · paid"}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                        <button onClick={(ev) => { ev.stopPropagation(); app.updateEntry(entry.id, { paid: !unpaid ? false : true }); haptic(); }} title={unpaid ? "Mark paid" : "Mark unpaid"} style={{ background: unpaid ? `${t.inc}20` : `${t.exp}15`, border: `1px solid ${unpaid ? t.inc + "40" : t.exp + "30"}`, color: unpaid ? t.inc : t.exp, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>{unpaid ? "Pay" : "Unpay"}</button>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: t.exp, fontFamily: t.mono }}>-{fmt(Math.abs(entry.amount || 0))}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // ── Net Worth Detail Page ──
   if (showNetWorth && !cur) {
@@ -2984,6 +3229,18 @@ ${context}`;
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, position: "relative" }}>
+          {/* Connection / sync indicator */}
+          {(() => {
+            const status = !online ? { color: "#f59e0b", label: "Offline", title: "You're offline. Changes are saved locally and will sync when you reconnect." }
+              : pendingWrites ? { color: t.accent, label: "Syncing", title: "Saving changes to the cloud…" }
+              : { color: t.inc, label: "Synced", title: "All changes saved." };
+            return (
+              <div title={status.title} style={{ position: "absolute", left: 0, display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 10, background: `${status.color}10`, border: `1px solid ${status.color}30`, fontSize: 10, color: status.color, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: status.color, boxShadow: pendingWrites ? `0 0 0 0 ${status.color}` : "none", animation: pendingWrites ? "pulse 1.5s ease infinite" : "none" }} />
+                {status.label}
+              </div>
+            );
+          })()}
           <h1 style={{ fontSize: 18, fontWeight: 800, margin: 0, letterSpacing: "0.18em", textTransform: "uppercase", color: t.accent }}>MAVERICK</h1>
           <button onClick={() => { setShowSettings(!showSettings); haptic(); }} style={{
             position: "absolute", right: 0, background: showSettings ? `${t.accent}20` : t.surface,
@@ -2998,7 +3255,7 @@ ${context}`;
         {settingsPanel}
 
         {/* Greeting section */}
-        <div style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 14, color: t.textMuted, fontWeight: 400, marginBottom: 2 }}>{greeting},</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: t.text, marginBottom: 12 }}>{displayName}</div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -3007,6 +3264,111 @@ ${context}`;
           <div style={{ fontSize: 32, fontWeight: 700, color: t.text, marginTop: 4 }}><AnimatedCurrency value={totalBalance} /></div>
         </div>
 
+        {/* Global search */}
+        <div style={{ position: "relative", marginBottom: 20 }}>
+          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: t.textMuted, fontSize: 14 }}>⌕</span>
+          <input
+            value={globalSearch}
+            onChange={e => setGlobalSearch(e.target.value)}
+            placeholder="Search all transactions, folders, tags…"
+            style={{ width: "100%", boxSizing: "border-box", background: t.surface, border: `1px solid ${globalSearch ? t.accent + "40" : t.cardBorder}`, borderRadius: 12, padding: "12px 36px 12px 36px", color: t.text, fontSize: 14, outline: "none", transition: "border-color 0.15s" }}
+          />
+          {globalSearch && (
+            <button onClick={() => setGlobalSearch("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 18, padding: 4, lineHeight: 1 }}>×</button>
+          )}
+        </div>
+
+        {/* Search results — replaces dashboard sections when active */}
+        {globalSearch.trim() && (() => {
+          const q = globalSearch.trim().toLowerCase();
+          const cats = allCats();
+          const nodeById = id => d.nodes.find(n => n.id === id);
+          const folderOf = nid => {
+            let n = nodeById(nid);
+            while (n?.parentId) n = nodeById(n.parentId);
+            return n;
+          };
+          const matches = (d.entries || []).map(e => {
+            const cat = cats.find(c => c.id === e.category);
+            const node = nodeById(e.nodeId);
+            const folder = folderOf(e.nodeId);
+            const tagStr = Array.isArray(e.tags) ? e.tags.join(" ") : (e.tags || "");
+            const amountStr = String(e.amount || "");
+            const haystack = [e.label, cat?.label, node?.name, folder?.name, tagStr, amountStr, e.dateISO]
+              .filter(Boolean).join(" ").toLowerCase();
+            return haystack.includes(q) ? { entry: e, cat, node, folder } : null;
+          }).filter(Boolean);
+
+          // Sort newest first, cap at 50 to keep DOM light
+          matches.sort((a, b) => (b.entry.dateISO || "").localeCompare(a.entry.dateISO || ""));
+          const shown = matches.slice(0, 50);
+          const totalMatched = matches.length;
+          const incTotal = matches.filter(m => m.entry.type === "income").reduce((s, m) => s + (m.entry.amount || 0), 0);
+          const expTotal = matches.filter(m => m.entry.type === "expense").reduce((s, m) => s + (m.entry.amount || 0), 0);
+
+          if (totalMatched === 0) {
+            return (
+              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14, padding: "32px 20px", textAlign: "center", marginBottom: 20 }}>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>🔍</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>No matches</div>
+                <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>Try a different label, category, folder, tag, or amount.</div>
+              </div>
+            );
+          }
+
+          return (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 8, paddingLeft: 2, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>{totalMatched} match{totalMatched === 1 ? "" : "es"}{shown.length < totalMatched ? ` (showing ${shown.length})` : ""}</span>
+                <span style={{ fontWeight: 400, letterSpacing: "0.04em", textTransform: "none", fontFamily: t.mono }}>
+                  {incTotal > 0 && <span style={{ color: t.inc, marginRight: 8 }}>+{fmt(incTotal)}</span>}
+                  {expTotal > 0 && <span style={{ color: t.exp }}>-{fmt(expTotal)}</span>}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {shown.map(({ entry, cat, node, folder }) => (
+                  <div key={entry.id} onClick={() => {
+                    // Navigate into the folder (or sub-budget) that owns this entry
+                    if (entry.nodeId) {
+                      const owner = nodeById(entry.nodeId);
+                      if (owner) {
+                        // Build nav stack from root to owner
+                        const stack = [];
+                        let cur = owner;
+                        while (cur) { stack.unshift(cur.id); cur = cur.parentId ? nodeById(cur.parentId) : null; }
+                        setNavStack(stack);
+                        setGlobalSearch("");
+                        haptic();
+                      }
+                    }
+                  }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, cursor: "pointer", transition: "background 0.15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>
+                      {cat ? cat.icon : "📋"}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {folder ? folder.name : "—"}
+                        {node && node.id !== folder?.id ? ` › ${node.name}` : ""}
+                        {entry.dateISO ? ` · ${fmtDate(entry.dateISO)}` : ""}
+                        {entry.paid === false && entry.type === "expense" ? " · unpaid" : ""}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 600, flexShrink: 0, color: entry.type === "income" ? t.inc : t.exp }}>
+                      {entry.type === "income" ? "+" : "-"}{fmt(Math.abs(entry.amount || 0))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Dashboard sections — hidden while search is active */}
+        {globalSearch.trim() ? null : (
+        <>
         {/* 2x2 Hero Grid */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
           {/* Budgets */}
@@ -3028,13 +3390,27 @@ ${context}`;
             <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#d6d3d1" }}>›</span>
           </div>
 
-          {/* Paycheck Calculator */}
-          <div style={{ background: "linear-gradient(135deg, #1e1b4b, #312e81)", borderRadius: 16, padding: 14, minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", opacity: 0.65, position: "relative" }}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(129,140,248,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>💰</div>
-            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(199,210,254,0.7)" }}>Paycheck</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#c7d2fe", marginTop: 2 }}>Calculator</div>
-            <div style={{ fontSize: 10, color: "rgba(199,210,254,0.5)", marginTop: 4 }}>Coming soon</div></div>
-          </div>
+          {/* Bill Calendar */}
+          {(() => {
+            const now = new Date();
+            const todayISOStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+            const weekISOStr = (() => { const w = new Date(now.getTime() + 7*86400000); return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,"0")}-${String(w.getDate()).padStart(2,"0")}`; })();
+            const upcoming = (d.entries || []).filter(e => e.type === "expense" && e.paid === false && e.dateISO && e.dateISO >= todayISOStr && e.dateISO <= weekISOStr);
+            const upcomingTotal = upcoming.reduce((s, e) => s + (e.amount || 0), 0);
+            return (
+              <div onClick={() => { setShowBillCalendar(true); haptic(); }} style={{ background: "linear-gradient(135deg, #1e1b4b, #312e81)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
+                onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(129,140,248,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📅</div>
+                <div>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(199,210,254,0.7)" }}>Bills</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#c7d2fe", marginTop: 2 }}>{upcoming.length === 0 ? "All clear" : `${upcoming.length} due`}</div>
+                  {upcoming.length > 0 && <div style={{ fontSize: 12, fontWeight: 600, color: "#a5b4fc", fontFamily: t.mono, marginTop: 4 }}>{fmt(upcomingTotal)}</div>}
+                  {upcoming.length === 0 && <div style={{ fontSize: 10, color: "rgba(199,210,254,0.5)", marginTop: 4 }}>This week</div>}
+                </div>
+                <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#c7d2fe" }}>›</span>
+              </div>
+            );
+          })()}
 
           {/* AI Advisor */}
           <div onClick={() => { setShowAdvisor(true); haptic(); }} style={{ background: "linear-gradient(135deg, #042f2e, #065f46)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
@@ -3051,7 +3427,7 @@ ${context}`;
         <div style={{ background: "linear-gradient(135deg, #3b0764, #581c87)", borderRadius: 16, padding: "12px 16px", marginBottom: 20, display: "flex", justifyContent: "space-around", alignItems: "center" }}>
           {[
             { icon: "📂", label: "New Folder", action: () => { setActiveTab("budgets"); setTimeout(() => setAddingRoot(true), 200); } },
-            { icon: "📊", label: "Net Worth", action: () => setShowNetWorth(true) },
+            { icon: "📅", label: "Bills", action: () => setShowBillCalendar(true) },
             { icon: "🤖", label: "AI Help", action: () => setShowAdvisor(true) },
             { icon: "⚙", label: "Settings", action: () => setShowSettings(!showSettings) },
           ].map(a => (
@@ -3131,6 +3507,8 @@ ${context}`;
               ))}
             </div>
           </div>
+        )}
+        </>
         )}
 
         {/* Spacer for bottom nav */}

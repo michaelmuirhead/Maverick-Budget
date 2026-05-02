@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, GoogleAuthProvider, signInWithPopup } from "firebase/auth";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, query, where, getDocs } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, collection, query, where, getDocs, waitForPendingWrites } from "firebase/firestore";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 
 const firebaseConfig = {
@@ -14,7 +14,19 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// IndexedDB-backed local cache so writes queue while offline and replay on reconnect.
+// Multi-tab manager keeps the cache coherent across browser tabs.
+export const db = (() => {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    });
+  } catch (e) {
+    // Fallback if persistence can't be enabled (e.g. private browsing, unsupported browser)
+    console.warn("[Firestore] persistent cache unavailable, falling back to memory:", e?.message || e);
+    return initializeFirestore(app, {});
+  }
+})();
 export const googleProvider = new GoogleAuthProvider();
 
 // FCM — may fail on iOS Safari or if permission denied
@@ -144,4 +156,5 @@ export {
   where,
   getDocs,
   getToken,
+  waitForPendingWrites,
 };
