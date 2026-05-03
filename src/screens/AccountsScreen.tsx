@@ -4,8 +4,10 @@ import { useSession } from "@/lib/session";
 import { useAccounts, useAllTransactions } from "@/hooks/useHouseholdData";
 import { Button } from "@/components/ui/Button";
 import { Sheet } from "@/components/ui/Sheet";
+import { DragHandle, Sortable } from "@/components/ui/Sortable";
 import { CreateAccountForm } from "./CreateAccountForm";
 import { computeAccountBalance } from "@/lib/budget";
+import { reorderAccounts } from "@/lib/accounts";
 import { formatCents } from "@/lib/money";
 import type { AccountDoc, TransactionDoc } from "@/types/schema";
 
@@ -59,6 +61,7 @@ export function AccountsScreen() {
           accounts={onBudget}
           balances={balancesByAccountId}
           currency={household.currency}
+          householdId={household.id}
         />
       ) : null}
 
@@ -69,6 +72,7 @@ export function AccountsScreen() {
           accounts={offBudget}
           balances={balancesByAccountId}
           currency={household.currency}
+          householdId={household.id}
         />
       ) : null}
 
@@ -89,6 +93,7 @@ export function AccountsScreen() {
               accounts={closedAccounts}
               balances={balancesByAccountId}
               currency={household.currency}
+              householdId={household.id}
             />
           ) : null}
         </div>
@@ -114,12 +119,14 @@ function Section({
   accounts,
   balances,
   currency,
+  householdId,
 }: {
   title: string;
   total: string;
   accounts: AccountDoc[];
   balances: Map<string, ReturnType<typeof computeAccountBalance>>;
   currency: string;
+  householdId: string;
 }) {
   return (
     <section className="flex flex-col gap-2">
@@ -130,20 +137,38 @@ function Section({
         <span className="text-xs text-white/50">{total}</span>
       </div>
       <ul className="overflow-hidden rounded-2xl bg-white/5 ring-1 ring-white/10">
-        {accounts.map((a, i) => (
-          <li key={a.id} className={i > 0 ? "border-t border-white/5" : undefined}>
-            <Link
-              to={`/accounts/${a.id}`}
-              className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-white/[0.03]"
+        <Sortable
+          items={accounts}
+          onReorder={(ids) => reorderAccounts(householdId, ids)}
+        >
+          {(a, h) => (
+            <li
+              ref={h.ref as (n: HTMLLIElement | null) => void}
+              style={h.style}
+              className="border-t border-white/5 first:border-t-0 bg-white/[0.02]"
             >
-              <div className="flex flex-col">
-                <span className="text-sm font-medium">{a.name}</span>
-                <span className="text-xs text-white/40">{prettyType(a.type)}</span>
+              <div className="flex items-center gap-1 px-2 py-3">
+                <DragHandle
+                  {...(h.dragHandleProps as React.HTMLAttributes<HTMLButtonElement>)}
+                  label={`Reorder ${a.name}`}
+                />
+                <Link
+                  to={`/accounts/${a.id}`}
+                  className="flex flex-1 items-center justify-between gap-3 hover:opacity-80"
+                >
+                  <div className="flex flex-col">
+                    <span className="text-sm font-medium">{a.name}</span>
+                    <span className="text-xs text-white/40">{prettyType(a.type)}</span>
+                  </div>
+                  <BalancePill
+                    cents={balances.get(a.id)?.totalCents ?? 0}
+                    currency={currency}
+                  />
+                </Link>
               </div>
-              <BalancePill cents={balances.get(a.id)?.totalCents ?? 0} currency={currency} />
-            </Link>
-          </li>
-        ))}
+            </li>
+          )}
+        </Sortable>
       </ul>
     </section>
   );

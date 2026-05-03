@@ -12,6 +12,7 @@ import { SettingsScreen } from "@/screens/SettingsScreen";
 import { BudgetScreen } from "@/screens/BudgetScreen";
 import { AccountsScreen } from "@/screens/AccountsScreen";
 import { AccountDetailScreen } from "@/screens/AccountDetailScreen";
+import { ScheduledScreen } from "@/screens/ScheduledScreen";
 import { PlaceholderScreen } from "@/screens/PlaceholderScreen";
 
 export function App() {
@@ -48,6 +49,7 @@ export function App() {
             element={<PlaceholderScreen title="Reports" />}
           />
           <Route path="/settings" element={<SettingsScreen />} />
+          <Route path="/scheduled" element={<ScheduledScreen />} />
           <Route path="*" element={<Navigate to="/budget" replace />} />
         </Route>
       </Routes>

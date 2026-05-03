@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
 import { signOutCurrentUser } from "@/lib/auth";
 import { PlaceholderScreen } from "./PlaceholderScreen";
@@ -36,6 +37,19 @@ export function SettingsScreen() {
         <p className="mt-2 text-xs text-white/40">
           Share this code with your spouse. They'll enter it after signing up.
         </p>
+      </Section>
+
+      <Section title="Tools">
+        <Link
+          to="/scheduled"
+          className="flex items-center justify-between rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 hover:bg-white/10"
+        >
+          <div>
+            <div className="text-sm text-white/80">Scheduled transactions</div>
+            <div className="text-xs text-white/40">Recurring bills, paychecks, transfers.</div>
+          </div>
+          <span className="text-white/40">›</span>
+        </Link>
       </Section>
 
       <Section title="Account">

@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useId, useMemo, useState, type FormEvent } from "react";
 import { useSession } from "@/lib/session";
 import {
   useAccounts,
+  useAllTransactions,
   useCategories,
   useCategoryGroups,
 } from "@/hooks/useHouseholdData";
@@ -20,8 +21,16 @@ import { todayISO } from "@/lib/dates";
 import type {
   AccountDoc,
   TransactionDoc,
+  TransactionSplit,
   TransactionStatus,
 } from "@/types/schema";
+
+interface SplitDraft {
+  /** Magnitude as the user types it (e.g. "12.34"). Sign is applied at save. */
+  amountInput: string;
+  categoryId: string | null;
+  memo: string;
+}
 
 interface Props {
   /** The account this form is anchored to (the source side, for transfers). */
@@ -39,6 +48,43 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
   const accounts = useAccounts();
   const groups = useCategoryGroups();
   const categories = useCategories();
+  const allTxns = useAllTransactions();
+  const payeeListId = useId();
+
+  /**
+   * Index of payee names → most-recently-used category, derived from history.
+   * When the user picks a known payee and hasn't set a category, we pre-fill.
+   * Skips transfer txns (their payee names are auto-generated).
+   */
+  const payeeIndex = useMemo(() => {
+    const m = new Map<
+      string,
+      { name: string; defaultCategoryId: string | null; lastUsedAt: string }
+    >();
+    for (const t of allTxns.data) {
+      if (!t.payeeName || t.transferTransactionId) continue;
+      const trimmed = t.payeeName.trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      const existing = m.get(key);
+      if (!existing || t.date > existing.lastUsedAt) {
+        m.set(key, {
+          name: trimmed,
+          defaultCategoryId: t.categoryId,
+          lastUsedAt: t.date,
+        });
+      }
+    }
+    return m;
+  }, [allTxns.data]);
+
+  const payeeOptions = useMemo(
+    () =>
+      Array.from(payeeIndex.values())
+        .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt))
+        .map((p) => p.name),
+    [payeeIndex],
+  );
 
   const initialDirection: Direction = existing
     ? existing.transferTransactionId
@@ -58,6 +104,22 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
   const [payeeName, setPayeeName] = useState(
     existing && !existing.transferTransactionId ? (existing.payeeName ?? "") : "",
   );
+  const [isSplit, setIsSplit] = useState(
+    existing?.splits != null && existing.splits.length > 0,
+  );
+  const [splits, setSplits] = useState<SplitDraft[]>(() => {
+    if (existing?.splits && existing.splits.length > 0) {
+      return existing.splits.map((s) => ({
+        amountInput: Math.abs(s.amountCents / 100).toFixed(2),
+        categoryId: s.categoryId,
+        memo: s.memo ?? "",
+      }));
+    }
+    return [
+      { amountInput: "", categoryId: null, memo: "" },
+      { amountInput: "", categoryId: null, memo: "" },
+    ];
+  });
   const [categoryId, setCategoryId] = useState<string | null>(
     existing?.categoryId ?? null,
   );
@@ -127,16 +189,51 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
       } else {
         const signed = direction === "outflow" ? -magnitude : magnitude;
         const effectiveCategory = direction === "inflow" ? null : categoryId;
+
+        // Build splits payload (outflow + isSplit only).
+        let splitsPayload: TransactionSplit[] | null = null;
+        if (direction === "outflow" && isSplit) {
+          if (splits.length < 2) {
+            throw new Error("A split needs at least two lines.");
+          }
+          let sum = 0;
+          const built: TransactionSplit[] = [];
+          for (let i = 0; i < splits.length; i++) {
+            const s = splits[i];
+            const m = parseCents(s.amountInput);
+            if (m === null || m <= 0) {
+              throw new Error(`Split #${i + 1} needs a positive amount.`);
+            }
+            if (!s.categoryId) {
+              throw new Error(`Split #${i + 1} needs a category.`);
+            }
+            const signedSplit = -m; // outflow
+            sum += signedSplit;
+            built.push({
+              amountCents: signedSplit,
+              categoryId: s.categoryId,
+              memo: s.memo.trim() || null,
+            });
+          }
+          if (sum !== signed) {
+            throw new Error(
+              `Splits add to ${(Math.abs(sum) / 100).toFixed(2)} but total is ${(magnitude / 100).toFixed(2)}.`,
+            );
+          }
+          splitsPayload = built;
+        }
+
         if (existing) {
           await updateTransaction({
             householdId: household.id,
             transactionId: existing.id,
             date,
             amountCents: signed,
-            categoryId: effectiveCategory,
+            categoryId: splitsPayload ? null : effectiveCategory,
             payeeName,
             memo,
             status,
+            splits: splitsPayload,
           });
         } else {
           await createTransaction({
@@ -145,10 +242,11 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
             accountId,
             date,
             amountCents: signed,
-            categoryId: effectiveCategory,
+            categoryId: splitsPayload ? null : effectiveCategory,
             payeeName,
             memo,
             status,
+            splits: splitsPayload,
           });
         }
       }
@@ -235,20 +333,69 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
           editMode={editMode}
         />
       ) : (
-        <Input
-          label="Payee"
-          value={payeeName}
-          onChange={(e) => setPayeeName(e.target.value)}
-          placeholder={direction === "inflow" ? "e.g. Acme Payroll" : "e.g. Trader Joe's"}
-        />
+        <>
+          <Input
+            label="Payee"
+            value={payeeName}
+            onChange={(e) => {
+              const value = e.target.value;
+              setPayeeName(value);
+              // Auto-fill the category when the user picks a remembered payee
+              // and hasn't already chosen a different category.
+              if (direction === "outflow" && !isSplit && categoryId === null) {
+                const match = payeeIndex.get(value.trim().toLowerCase());
+                if (match?.defaultCategoryId) {
+                  setCategoryId(match.defaultCategoryId);
+                }
+              }
+            }}
+            placeholder={direction === "inflow" ? "e.g. Acme Payroll" : "e.g. Trader Joe's"}
+            list={payeeListId}
+            autoComplete="off"
+          />
+          <datalist id={payeeListId}>
+            {payeeOptions.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+        </>
       )}
 
       {direction === "outflow" ? (
-        <CategoryPicker
-          categoryId={categoryId}
-          onChange={setCategoryId}
-          grouped={groupedCats}
-        />
+        <>
+          {!isSplit ? (
+            <CategoryPicker
+              categoryId={categoryId}
+              onChange={setCategoryId}
+              grouped={groupedCats}
+            />
+          ) : (
+            <SplitsEditor
+              splits={splits}
+              onChange={setSplits}
+              grouped={groupedCats}
+              totalMagnitudeCents={parseCents(amountInput) ?? 0}
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (!isSplit) {
+                // Pre-seed first split with the current single category so
+                // the user doesn't lose context when toggling.
+                setSplits((prev) =>
+                  prev[0] && prev[0].categoryId === null && categoryId
+                    ? [{ ...prev[0], categoryId }, ...prev.slice(1)]
+                    : prev,
+                );
+              }
+              setIsSplit((v) => !v);
+            }}
+            className="self-start text-xs text-brand-300 hover:text-brand-200"
+          >
+            {isSplit ? "Use a single category" : "Split this transaction"}
+          </button>
+        </>
       ) : direction === "inflow" ? (
         <div className="rounded-xl bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300 ring-1 ring-emerald-500/20">
           Inflow goes to <strong>Ready to Assign</strong> on the Budget tab.
@@ -448,6 +595,135 @@ function DestAccountPicker({
           To change the destination, delete this transfer and create a new one.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function SplitsEditor({
+  splits,
+  onChange,
+  grouped,
+  totalMagnitudeCents,
+}: {
+  splits: SplitDraft[];
+  onChange: (next: SplitDraft[]) => void;
+  grouped: { group: { id: string; name: string }; cats: { id: string; name: string }[] }[];
+  totalMagnitudeCents: number;
+}) {
+  const sumCents = splits.reduce(
+    (s, x) => s + (parseCents(x.amountInput) ?? 0),
+    0,
+  );
+  const remaining = totalMagnitudeCents - sumCents;
+
+  function patch(i: number, p: Partial<SplitDraft>) {
+    onChange(splits.map((s, idx) => (idx === i ? { ...s, ...p } : s)));
+  }
+  function remove(i: number) {
+    if (splits.length <= 2) return;
+    onChange(splits.filter((_, idx) => idx !== i));
+  }
+  function add() {
+    onChange([...splits, { amountInput: "", categoryId: null, memo: "" }]);
+  }
+  function fillRemainingInto(i: number) {
+    if (remaining <= 0) return;
+    const cur = parseCents(splits[i].amountInput) ?? 0;
+    patch(i, { amountInput: ((cur + remaining) / 100).toFixed(2) });
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <label className="text-xs font-medium text-white/70">Splits</label>
+      <div className="flex flex-col gap-2 rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/10">
+        {splits.map((s, i) => (
+          <div key={i} className="flex flex-col gap-1.5 rounded-lg bg-white/5 p-2 ring-1 ring-white/5">
+            <div className="flex items-center gap-2">
+              <input
+                value={s.amountInput}
+                onChange={(e) => patch(i, { amountInput: e.target.value })}
+                placeholder="0.00"
+                inputMode="decimal"
+                className="min-h-[40px] w-24 rounded-lg bg-white/5 px-3 text-sm text-white ring-1 ring-inset ring-white/10 focus:outline-none focus:ring-brand-400/60 tabular-nums"
+              />
+              <select
+                value={s.categoryId ?? ""}
+                onChange={(e) => patch(i, { categoryId: e.target.value || null })}
+                className="min-h-[40px] flex-1 rounded-lg bg-white/5 px-3 text-sm text-white ring-1 ring-inset ring-white/10 focus:outline-none focus:ring-brand-400/60"
+              >
+                <option value="">Pick a category…</option>
+                {grouped.map((g) =>
+                  g.cats.length > 0 ? (
+                    <optgroup key={g.group.id} label={g.group.name}>
+                      {g.cats.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null,
+                )}
+              </select>
+              {splits.length > 2 ? (
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  aria-label="Remove split"
+                  className="rounded-full p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                value={s.memo}
+                onChange={(e) => patch(i, { memo: e.target.value })}
+                placeholder="Memo (optional)"
+                className="min-h-[36px] flex-1 rounded-lg bg-white/5 px-3 text-xs text-white/80 ring-1 ring-inset ring-white/10 focus:outline-none focus:ring-brand-400/60"
+              />
+              {remaining > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => fillRemainingInto(i)}
+                  className="text-[11px] text-brand-300 hover:text-brand-200"
+                >
+                  Fill remaining
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={add}
+          className="self-start rounded-lg bg-white/5 px-2.5 py-1 text-xs text-white/70 ring-1 ring-white/10 hover:bg-white/10"
+        >
+          + Add split
+        </button>
+        <div className="mt-1 flex items-center justify-between gap-2 border-t border-white/5 pt-2 text-[11px] tabular-nums">
+          <span className="text-white/50">
+            Sum {(sumCents / 100).toFixed(2)} of {(totalMagnitudeCents / 100).toFixed(2)}
+          </span>
+          <span
+            className={
+              remaining === 0
+                ? "text-emerald-300"
+                : remaining > 0
+                  ? "text-amber-300"
+                  : "text-red-300"
+            }
+          >
+            {remaining === 0
+              ? "Balanced"
+              : remaining > 0
+                ? `${(remaining / 100).toFixed(2)} remaining`
+                : `${(Math.abs(remaining) / 100).toFixed(2)} over`}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Sheet } from "@/components/ui/Sheet";
 import { TransactionForm } from "./TransactionForm";
 import { EditAccountForm } from "./EditAccountForm";
+import { ReconcileForm } from "./ReconcileForm";
 import { computeAccountBalance } from "@/lib/budget";
 import { formatCents, formatCentsSigned } from "@/lib/money";
 import { formatHumanDate } from "@/lib/dates";
@@ -24,6 +25,7 @@ export function AccountDetailScreen() {
   const [adding, setAdding] = useState(false);
   const [editingTxn, setEditingTxn] = useState<TransactionDoc | null>(null);
   const [editingAccount, setEditingAccount] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
 
   const account = accounts.data.find((a) => a.id === accountId);
 
@@ -96,9 +98,18 @@ export function AccountDetailScreen() {
             </div>
           </div>
         </div>
-        <Button onClick={() => setAdding(true)} variant="secondary">
-          + Add transaction
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setAdding(true)} variant="secondary" fullWidth>
+            + Add transaction
+          </Button>
+          <Button
+            onClick={() => setReconciling(true)}
+            variant="ghost"
+            disabled={txns.data.length === 0}
+          >
+            Reconcile
+          </Button>
+        </div>
       </header>
 
       {txns.status === "loading" ? (
@@ -164,6 +175,20 @@ export function AccountDetailScreen() {
           />
         ) : null}
       </Sheet>
+
+      <Sheet
+        open={reconciling}
+        onClose={() => setReconciling(false)}
+        title="Reconcile account"
+      >
+        {account ? (
+          <ReconcileForm
+            account={account}
+            transactions={txns.data}
+            onDone={() => setReconciling(false)}
+          />
+        ) : null}
+      </Sheet>
     </div>
   );
 }
@@ -179,6 +204,20 @@ function TxnRow({
 }) {
   const isInflow = txn.amountCents > 0;
   const isCleared = txn.status === "cleared" || txn.status === "reconciled";
+  const isSplit = txn.splits != null && txn.splits.length > 0;
+  const isTransfer = txn.transferTransactionId != null;
+
+  let secondLine: React.ReactNode;
+  if (isSplit) {
+    secondLine = <>Split · {txn.splits!.length} categories</>;
+  } else if (isTransfer) {
+    secondLine = <>Transfer</>;
+  } else if (category) {
+    secondLine = <>{category.name}</>;
+  } else if (txn.categoryId === null) {
+    secondLine = <>Inflow</>;
+  }
+
   return (
     <>
       <div className="min-w-0 flex flex-col">
@@ -202,7 +241,7 @@ function TxnRow({
         </div>
         <span className="truncate text-xs text-white/40">
           {formatHumanDate(txn.date)}
-          {category ? <> · {category.name}</> : txn.categoryId === null ? <> · Inflow</> : null}
+          {secondLine ? <> · {secondLine}</> : null}
           {txn.memo ? <> · {txn.memo}</> : null}
         </span>
       </div>

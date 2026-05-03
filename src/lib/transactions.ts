@@ -13,6 +13,7 @@ import type {
   Cents,
   DateString,
   TransactionDoc,
+  TransactionSplit,
   TransactionStatus,
 } from "@/types/schema";
 
@@ -21,12 +22,41 @@ interface CreateTransactionInput {
   createdByUid: string;
   accountId: string;
   date: DateString;
-  /** Negative = outflow, positive = inflow. */
+  /** Negative = outflow, positive = inflow. For split txns, must equal sum of splits. */
   amountCents: Cents;
+  /** Set to null when splits is provided. */
   categoryId: string | null;
   payeeName: string | null;
   memo: string | null;
   status?: TransactionStatus;
+  /** When provided, parent categoryId must be null and splits must sum to amountCents. */
+  splits?: TransactionSplit[] | null;
+}
+
+export class SplitsMismatchError extends Error {
+  constructor(public sumCents: Cents, public expectedCents: Cents) {
+    super(
+      `Splits add up to ${(sumCents / 100).toFixed(2)} but the transaction is ${(expectedCents / 100).toFixed(2)}.`,
+    );
+    this.name = "SplitsMismatchError";
+  }
+}
+
+function normalizeSplits(
+  splits: TransactionSplit[] | null | undefined,
+  expectedTotalCents: Cents,
+): TransactionSplit[] | null {
+  if (!splits || splits.length === 0) return null;
+  const sum = splits.reduce((s, x) => s + x.amountCents, 0);
+  if (sum !== expectedTotalCents) {
+    throw new SplitsMismatchError(sum, expectedTotalCents);
+  }
+  // Trim memos.
+  return splits.map((s) => ({
+    amountCents: s.amountCents,
+    categoryId: s.categoryId,
+    memo: s.memo?.trim() || null,
+  }));
 }
 
 export async function createTransaction(
@@ -34,19 +64,21 @@ export async function createTransaction(
 ): Promise<TransactionDoc> {
   const id = generateId();
   const ts = serverTimestamp();
+  const splits = normalizeSplits(input.splits, input.amountCents);
   const data: Omit<TransactionDoc, "createdAt" | "updatedAt"> = {
     id,
     accountId: input.accountId,
     date: input.date,
     amountCents: input.amountCents,
-    categoryId: input.categoryId,
+    // Parent has no own category when splits are present.
+    categoryId: splits ? null : input.categoryId,
     payeeId: null,
     payeeName: input.payeeName?.trim() || null,
     memo: input.memo?.trim() || null,
     status: input.status ?? "uncleared",
     transferTransactionId: null,
     transferAccountId: null,
-    splits: null,
+    splits,
     source: "manual",
     plaidTransactionId: null,
     createdByUid: input.createdByUid,
@@ -68,6 +100,8 @@ interface UpdateTransactionInput {
   payeeName: string | null;
   memo: string | null;
   status: TransactionStatus;
+  /** Pass an array to make this a split; pass null to clear splits and use categoryId instead. */
+  splits?: TransactionSplit[] | null;
 }
 
 export async function updateTransaction(input: UpdateTransactionInput): Promise<void> {
@@ -78,13 +112,15 @@ export async function updateTransaction(input: UpdateTransactionInput): Promise<
     "transactions",
     input.transactionId,
   );
+  const splits = normalizeSplits(input.splits, input.amountCents);
   await updateDoc(ref, {
     date: input.date,
     amountCents: input.amountCents,
-    categoryId: input.categoryId,
+    categoryId: splits ? null : input.categoryId,
     payeeName: input.payeeName?.trim() || null,
     memo: input.memo?.trim() || null,
     status: input.status,
+    splits,
     updatedAt: serverTimestamp(),
   });
 }
@@ -246,4 +282,100 @@ export async function setTransactionStatus(
     doc(db, "households", householdId, "transactions", transactionId),
     { status, updatedAt: serverTimestamp() },
   );
+}
+
+// ── Reconciliation ──────────────────────────────────────────────────────────
+
+interface ReconcilePlan {
+  /** Difference between user-stated balance and the new cleared total. */
+  adjustmentCents: Cents;
+  /** Number of currently uncleared txns that will be marked cleared. */
+  unclearedCount: number;
+  /** Number of txns that will be marked reconciled. */
+  reconciledCount: number;
+}
+
+/** Pure-function preview of what reconciling would do. UI uses this to confirm. */
+export function planReconcile(
+  accountTransactions: TransactionDoc[],
+  statedBalanceCents: Cents,
+): ReconcilePlan {
+  const uncleared = accountTransactions.filter((t) => t.status === "uncleared");
+  // After reconcile, cleared balance equals the total balance of every txn
+  // not yet reconciled, plus already-reconciled txns. Simpler: cleared total
+  // post-reconcile == sum of all txns on account.
+  const currentTotal = accountTransactions.reduce((s, t) => s + t.amountCents, 0);
+  const adjustmentCents = statedBalanceCents - currentTotal;
+  const reconciledCount =
+    accountTransactions.filter((t) => t.status !== "reconciled").length +
+    (adjustmentCents !== 0 ? 1 : 0);
+  return {
+    adjustmentCents,
+    unclearedCount: uncleared.length,
+    reconciledCount,
+  };
+}
+
+interface ReconcileInput {
+  householdId: string;
+  accountId: string;
+  createdByUid: string;
+  statedBalanceCents: Cents;
+  /** Date to apply to the adjustment txn. Defaults to today. */
+  date: DateString;
+  /** All current transactions on the account (used to compute the diff). */
+  accountTransactions: TransactionDoc[];
+}
+
+/**
+ * Reconcile an account against the user's stated balance:
+ *   1. If stated ≠ current total, create an "adjustment" transaction
+ *      (uncategorized, status=reconciled) so the new total matches stated.
+ *   2. Mark every previously cleared/uncleared txn on the account as reconciled.
+ *
+ * Run as a single batch so partial failures don't leave the account half-done.
+ */
+export async function reconcileAccount(input: ReconcileInput): Promise<ReconcilePlan> {
+  const plan = planReconcile(input.accountTransactions, input.statedBalanceCents);
+  const ts = serverTimestamp();
+  const batch = writeBatch(db);
+
+  // Mark every non-reconciled txn as reconciled.
+  for (const t of input.accountTransactions) {
+    if (t.status === "reconciled") continue;
+    batch.update(
+      doc(db, "households", input.householdId, "transactions", t.id),
+      { status: "reconciled", updatedAt: ts },
+    );
+  }
+
+  // Optional adjustment txn so the new balance matches the user's bank.
+  if (plan.adjustmentCents !== 0) {
+    const adjId = generateId();
+    const adjData: Omit<TransactionDoc, "createdAt" | "updatedAt"> = {
+      id: adjId,
+      accountId: input.accountId,
+      date: input.date,
+      amountCents: plan.adjustmentCents,
+      categoryId: null,
+      payeeId: null,
+      payeeName: "Reconciliation Adjustment",
+      memo: null,
+      status: "reconciled",
+      transferTransactionId: null,
+      transferAccountId: null,
+      splits: null,
+      source: "manual",
+      plaidTransactionId: null,
+      createdByUid: input.createdByUid,
+    };
+    batch.set(doc(db, "households", input.householdId, "transactions", adjId), {
+      ...adjData,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  }
+
+  await batch.commit();
+  return plan;
 }

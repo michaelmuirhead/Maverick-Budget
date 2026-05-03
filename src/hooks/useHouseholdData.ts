@@ -8,6 +8,7 @@ import type {
   CategoryDoc,
   CategoryGroupDoc,
   CategoryMonthDoc,
+  ScheduledTransactionDoc,
   TransactionDoc,
 } from "@/types/schema";
 
@@ -29,6 +30,9 @@ function mapAssignment(_id: string, data: any): CategoryMonthDoc {
   // The doc ID is `${month}_${categoryId}` but both fields live in the doc body
   // already, so we ignore the ID here.
   return data as CategoryMonthDoc;
+}
+function mapScheduled(id: string, data: any): ScheduledTransactionDoc {
+  return { ...(data as ScheduledTransactionDoc), id };
 }
 
 // ── Hooks ───────────────────────────────────────────────────────────────────
@@ -112,4 +116,17 @@ export function useAllCategoryMonths() {
     [household.id],
   );
   return useCollection<CategoryMonthDoc>(q, mapAssignment);
+}
+
+export function useScheduledTransactions() {
+  const { household } = useSession();
+  const q = useMemo(
+    () =>
+      query(
+        collection(db, "households", household.id, "scheduledTransactions"),
+        orderBy("nextDate", "asc"),
+      ),
+    [household.id],
+  );
+  return useCollection<ScheduledTransactionDoc>(q, mapScheduled);
 }

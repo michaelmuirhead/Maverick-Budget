@@ -126,3 +126,19 @@ export async function closeAccount(householdId: string, accountId: string): Prom
 export async function reopenAccount(householdId: string, accountId: string): Promise<void> {
   await updateAccount(householdId, accountId, { closed: false });
 }
+
+export async function reorderAccounts(
+  householdId: string,
+  orderedIds: string[],
+): Promise<void> {
+  const { writeBatch } = await import("firebase/firestore");
+  const batch = writeBatch(db);
+  const ts = serverTimestamp();
+  orderedIds.forEach((id, i) => {
+    batch.update(doc(db, "households", householdId, "accounts", id), {
+      sortOrder: (i + 1) * 1000,
+      updatedAt: ts,
+    });
+  });
+  await batch.commit();
+}

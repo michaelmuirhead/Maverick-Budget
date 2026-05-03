@@ -107,12 +107,18 @@ export async function deleteCategoryGroup(
 export async function updateCategory(
   householdId: string,
   categoryId: string,
-  patch: { name?: string; hidden?: boolean; note?: string | null },
+  patch: {
+    name?: string;
+    hidden?: boolean;
+    note?: string | null;
+    goal?: import("@/types/schema").CategoryGoal | null;
+  },
 ): Promise<void> {
   const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
   if (patch.name !== undefined) data.name = patch.name.trim();
   if (patch.hidden !== undefined) data.hidden = patch.hidden;
   if (patch.note !== undefined) data.note = patch.note;
+  if (patch.goal !== undefined) data.goal = patch.goal;
   await updateDoc(doc(db, "households", householdId, "categories", categoryId), data);
 }
 
@@ -146,4 +152,43 @@ export async function deleteCategory(
   // Note: any categoryMonths/{m_categoryId} docs become orphaned. They're
   // ignored by the budget UI (no matching category) and harmless. We can
   // sweep them in a Cloud Function later.
+}
+
+// ── Reorder ─────────────────────────────────────────────────────────────────
+
+/**
+ * Rewrite sortOrder for an ordered list of category IDs. Sets
+ * sortOrder = (index + 1) × 1000 so re-orders only need full passes when the
+ * user actually drags. Uses a single batched write.
+ */
+export async function reorderCategories(
+  householdId: string,
+  orderedIds: string[],
+): Promise<void> {
+  const { writeBatch } = await import("firebase/firestore");
+  const batch = writeBatch(db);
+  const ts = serverTimestamp();
+  orderedIds.forEach((id, i) => {
+    batch.update(doc(db, "households", householdId, "categories", id), {
+      sortOrder: (i + 1) * 1000,
+      updatedAt: ts,
+    });
+  });
+  await batch.commit();
+}
+
+export async function reorderCategoryGroups(
+  householdId: string,
+  orderedIds: string[],
+): Promise<void> {
+  const { writeBatch } = await import("firebase/firestore");
+  const batch = writeBatch(db);
+  const ts = serverTimestamp();
+  orderedIds.forEach((id, i) => {
+    batch.update(doc(db, "households", householdId, "categoryGroups", id), {
+      sortOrder: (i + 1) * 1000,
+      updatedAt: ts,
+    });
+  });
+  await batch.commit();
 }
