@@ -1,20 +1,80 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // User profiles
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function household(householdId) {
+      return get(/databases/$(database)/documents/households/$(householdId)).data;
+    }
+    function isMemberOf(householdId) {
+      return isSignedIn() &&
+        request.auth.uid in household(householdId).memberUids;
+    }
+    function isOwnerOf(householdId) {
+      return isSignedIn() &&
+        request.auth.uid == household(householdId).ownerUid;
+    }
+    // True iff the only difference between the request and existing memberUids
+    // is the addition of the requesting user. Used to let a person join via
+    // a join code without granting blanket write access to the household.
+    function isJoiningSelf() {
+      return request.auth.uid in request.resource.data.memberUids
+        && !(request.auth.uid in resource.data.memberUids)
+        && request.resource.data.memberUids.toSet()
+             .difference(resource.data.memberUids.toSet())
+             .hasOnly([request.auth.uid])
+        && resource.data.memberUids.toSet()
+             .difference(request.resource.data.memberUids.toSet()).size() == 0;
     }
 
-    // Households and all sub-documents
-    // Any authenticated user can create a household
-    // Any authenticated user can read/write (tighten later to member-only)
-    match /households/{householdId} {
-      allow read, write: if request.auth != null;
-
-      match /{document=**} {
-        allow read, write: if request.auth != null;
+    // ── Per-user docs ──────────────────────────────────────────────────────
+    match /users/{uid} {
+      allow read, write: if isSelf(uid);
+      match /{subdoc=**} {
+        allow read, write: if isSelf(uid);
       }
+    }
+
+    // ── Households ─────────────────────────────────────────────────────────
+    match /households/{householdId} {
+      // Create: caller must be both owner and the only initial member.
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.memberUids.hasOnly([request.auth.uid]);
+
+      allow read: if isMemberOf(householdId);
+
+      // Update: existing members can update freely; non-members can update ONLY
+      // to add themselves to memberUids (the join flow), and only if they
+      // already know a valid join code (enforced by reading joinCodes first).
+      allow update: if isMemberOf(householdId) || isJoiningSelf();
+
+      allow delete: if isOwnerOf(householdId);
+
+      // All sub-collections inherit member-only access.
+      match /{document=**} {
+        allow read, write: if isMemberOf(householdId);
+      }
+    }
+
+    // ── Join code lookup ───────────────────────────────────────────────────
+    // joinCodes/{CODE} → { householdId: "..." }
+    // Created by the household owner when the household is created (or rotated).
+    // Read by anyone signed in (so they can resolve a code to a household ID).
+    match /joinCodes/{code} {
+      allow read: if isSignedIn();
+      // Only the owner of the referenced household may write the join-code doc.
+      allow create, update: if isSignedIn()
+        && request.resource.data.householdId is string
+        && household(request.resource.data.householdId).ownerUid == request.auth.uid;
+      allow delete: if isSignedIn()
+        && household(resource.data.householdId).ownerUid == request.auth.uid;
     }
   }
 }
