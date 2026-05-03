@@ -8,7 +8,6 @@ import type {
   CategoryDoc,
   CategoryGroupDoc,
   CategoryMonthDoc,
-  MonthString,
   TransactionDoc,
 } from "@/types/schema";
 
@@ -26,8 +25,10 @@ function mapCategory(id: string, data: any): CategoryDoc {
 function mapTransaction(id: string, data: any): TransactionDoc {
   return { ...(data as TransactionDoc), id };
 }
-function mapAssignment(id: string, data: any): CategoryMonthDoc {
-  return { ...(data as CategoryMonthDoc), categoryId: id };
+function mapAssignment(_id: string, data: any): CategoryMonthDoc {
+  // The doc ID is `${month}_${categoryId}` but both fields live in the doc body
+  // already, so we ignore the ID here.
+  return data as CategoryMonthDoc;
 }
 
 // ── Hooks ───────────────────────────────────────────────────────────────────
@@ -99,20 +100,16 @@ export function useAccountTransactions(accountId: string | null) {
   return useCollection<TransactionDoc>(q, mapTransaction);
 }
 
-/** Per-category assignments for a month. */
-export function useMonthAssignments(month: MonthString) {
+/**
+ * All per-category, per-month assignments across the entire household, ever.
+ * One subscription powers RTA + per-category rollover. For a personal budget
+ * this stays small (≤ a few thousand docs after years of use).
+ */
+export function useAllCategoryMonths() {
   const { household } = useSession();
   const q = useMemo(
-    () =>
-      collection(
-        db,
-        "households",
-        household.id,
-        "budgetMonths",
-        month,
-        "assignments",
-      ),
-    [household.id, month],
+    () => collection(db, "households", household.id, "categoryMonths"),
+    [household.id],
   );
   return useCollection<CategoryMonthDoc>(q, mapAssignment);
 }

@@ -2,15 +2,16 @@ import { useMemo, useState } from "react";
 import { useSession } from "@/lib/session";
 import {
   useAccounts,
+  useAllCategoryMonths,
   useAllTransactions,
   useCategories,
   useCategoryGroups,
-  useMonthAssignments,
 } from "@/hooks/useHouseholdData";
 import { Button } from "@/components/ui/Button";
 import { Sheet } from "@/components/ui/Sheet";
 import {
   computeCategoryActivity,
+  computeCategoryAvailable,
   computeReadyToAssign,
   setAssignment,
 } from "@/lib/budget";
@@ -35,32 +36,23 @@ export function BudgetScreen() {
   const categories = useCategories();
 
   const [month, setMonth] = useState<MonthString>(currentMonth());
-  const monthAssignments = useMonthAssignments(month);
-
-  // RTA needs all assignments across all months. For now pull from the same
-  // monthAssignments query — this will undercount RTA if there are assignments
-  // in other months. Acceptable for the first iteration; we'll switch to a
-  // collectionGroup query in Phase 2.2.
-  const assignmentsByMonth = useMemo(() => {
-    const m = new Map<MonthString, CategoryMonthDoc[]>();
-    m.set(month, monthAssignments.data);
-    return m;
-  }, [month, monthAssignments.data]);
+  const allCategoryMonths = useAllCategoryMonths();
 
   const onBudgetIds = useMemo(
     () => new Set(accounts.data.filter((a) => a.onBudget).map((a) => a.id)),
     [accounts.data],
   );
 
-  // Sum of assignments across the month displayed (used in RTA calc + header).
-  const allAssignmentsFlat = useMemo(
-    () => Array.from(assignmentsByMonth.values()).flat(),
-    [assignmentsByMonth],
+  // Just this month's assignments — used to display Assigned/Activity per row.
+  const thisMonthAssignments = useMemo(
+    () => allCategoryMonths.data.filter((a) => a.month === month),
+    [allCategoryMonths.data, month],
   );
 
   const ready = useMemo(
-    () => computeReadyToAssign(accounts.data, transactions.data, allAssignmentsFlat),
-    [accounts.data, transactions.data, allAssignmentsFlat],
+    () =>
+      computeReadyToAssign(accounts.data, transactions.data, allCategoryMonths.data),
+    [accounts.data, transactions.data, allCategoryMonths.data],
   );
 
   const categoriesByGroup = useMemo(() => {
@@ -102,7 +94,8 @@ export function BudgetScreen() {
               group={g}
               categories={categoriesByGroup.get(g.id) ?? []}
               transactions={transactions.data}
-              assignments={monthAssignments.data}
+              monthAssignments={thisMonthAssignments}
+              allAssignments={allCategoryMonths.data}
               month={month}
               currency={household.currency}
               onBudgetIds={onBudgetIds}
@@ -129,7 +122,7 @@ export function BudgetScreen() {
           <AssignEditor
             month={month}
             category={editing}
-            existing={monthAssignments.data.find((a) => a.categoryId === editing.id)}
+            existing={thisMonthAssignments.find((a) => a.categoryId === editing.id)}
             onDone={() => setEditing(null)}
           />
         ) : null}
@@ -247,7 +240,8 @@ function GroupSection({
   group,
   categories,
   transactions,
-  assignments,
+  monthAssignments,
+  allAssignments,
   month,
   currency,
   onBudgetIds,
@@ -257,16 +251,18 @@ function GroupSection({
   group: CategoryGroupDoc;
   categories: CategoryDoc[];
   transactions: TransactionDoc[];
-  assignments: CategoryMonthDoc[];
+  monthAssignments: CategoryMonthDoc[];
+  allAssignments: CategoryMonthDoc[];
   month: MonthString;
   currency: string;
   onBudgetIds: Set<string>;
   onPickCategory: (c: CategoryDoc) => void;
   onAddCategory: () => void;
 }) {
-  // Compute totals for the group header.
+  // Group header total = sum of THIS MONTH assignments across the group's
+  // categories. (Available rollover happens per category, not per group.)
   const groupAssigned = categories.reduce((s, c) => {
-    const a = assignments.find((x) => x.categoryId === c.id);
+    const a = monthAssignments.find((x) => x.categoryId === c.id);
     return s + (a?.assignedCents ?? 0);
   }, 0);
 
@@ -285,7 +281,7 @@ function GroupSection({
           <li className="px-4 py-3 text-xs text-white/40">No categories yet.</li>
         ) : (
           categories.map((c, i) => {
-            const a = assignments.find((x) => x.categoryId === c.id);
+            const a = monthAssignments.find((x) => x.categoryId === c.id);
             const assigned = a?.assignedCents ?? 0;
             const activity = computeCategoryActivity(
               c.id,
@@ -293,8 +289,14 @@ function GroupSection({
               transactions,
               onBudgetIds,
             );
-            // Available for this single month — proper rollover comes in 2.2.
-            const available = assigned + activity;
+            // Rollover-aware: walks every prior month's assigned + activity.
+            const available = computeCategoryAvailable(
+              c.id,
+              month,
+              allAssignments,
+              transactions,
+              onBudgetIds,
+            );
             return (
               <li key={c.id} className={i > 0 ? "border-t border-white/5" : undefined}>
                 <CategoryRow

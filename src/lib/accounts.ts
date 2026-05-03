@@ -3,6 +3,7 @@ import {
   doc,
   serverTimestamp,
   setDoc,
+  updateDoc,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "./firebase";
@@ -101,4 +102,27 @@ export const ACCOUNT_TYPES: { value: AccountType; label: string; onBudget: boole
 /** Use a fresh collection ref to discover sub-collection paths if needed. */
 export function accountsCollection(householdId: string) {
   return collection(db, "households", householdId, "accounts");
+}
+
+// ── Edits ───────────────────────────────────────────────────────────────────
+
+export async function updateAccount(
+  householdId: string,
+  accountId: string,
+  patch: { name?: string; type?: AccountType; closed?: boolean },
+): Promise<void> {
+  const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  if (patch.name !== undefined) data.name = patch.name.trim();
+  if (patch.type !== undefined) data.type = patch.type;
+  if (patch.closed !== undefined) data.closed = patch.closed;
+  await updateDoc(doc(db, "households", householdId, "accounts", accountId), data);
+}
+
+/** Convenience helper. Closes the account; transactions are preserved. */
+export async function closeAccount(householdId: string, accountId: string): Promise<void> {
+  await updateAccount(householdId, accountId, { closed: true });
+}
+
+export async function reopenAccount(householdId: string, accountId: string): Promise<void> {
+  await updateAccount(householdId, accountId, { closed: false });
 }

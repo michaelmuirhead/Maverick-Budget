@@ -8,7 +8,7 @@ import {
 } from "@/hooks/useHouseholdData";
 import { Button } from "@/components/ui/Button";
 import { Sheet } from "@/components/ui/Sheet";
-import { CreateTransactionForm } from "./CreateTransactionForm";
+import { TransactionForm } from "./TransactionForm";
 import { computeAccountBalance } from "@/lib/budget";
 import { formatCents, formatCentsSigned } from "@/lib/money";
 import { formatHumanDate } from "@/lib/dates";
@@ -21,6 +21,7 @@ export function AccountDetailScreen() {
   const categories = useCategories();
   const txns = useAccountTransactions(accountId ?? null);
   const [adding, setAdding] = useState(false);
+  const [editingTxn, setEditingTxn] = useState<TransactionDoc | null>(null);
 
   const account = accounts.data.find((a) => a.id === accountId);
 
@@ -91,11 +92,17 @@ export function AccountDetailScreen() {
         <ul className="overflow-hidden rounded-2xl bg-white/5 ring-1 ring-white/10">
           {txns.data.map((t, i) => (
             <li key={t.id} className={i > 0 ? "border-t border-white/5" : undefined}>
-              <TxnRow
-                txn={t}
-                category={t.categoryId ? categoryById.get(t.categoryId) : undefined}
-                currency={household.currency}
-              />
+              <button
+                type="button"
+                onClick={() => setEditingTxn(t)}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-white/[0.03]"
+              >
+                <TxnRow
+                  txn={t}
+                  category={t.categoryId ? categoryById.get(t.categoryId) : undefined}
+                  currency={household.currency}
+                />
+              </button>
             </li>
           ))}
         </ul>
@@ -103,10 +110,25 @@ export function AccountDetailScreen() {
 
       <Sheet open={adding} onClose={() => setAdding(false)} title="New transaction">
         {account ? (
-          <CreateTransactionForm
+          <TransactionForm
             accountId={account.id}
             accountName={account.name}
             onDone={() => setAdding(false)}
+          />
+        ) : null}
+      </Sheet>
+
+      <Sheet
+        open={editingTxn !== null}
+        onClose={() => setEditingTxn(null)}
+        title="Edit transaction"
+      >
+        {account && editingTxn ? (
+          <TransactionForm
+            accountId={account.id}
+            accountName={account.name}
+            existing={editingTxn}
+            onDone={() => setEditingTxn(null)}
           />
         ) : null}
       </Sheet>
@@ -124,12 +146,28 @@ function TxnRow({
   currency: string;
 }) {
   const isInflow = txn.amountCents > 0;
+  const isCleared = txn.status === "cleared" || txn.status === "reconciled";
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3">
+    <>
       <div className="min-w-0 flex flex-col">
-        <span className="truncate text-sm font-medium">
-          {txn.payeeName ?? <span className="text-white/40">(no payee)</span>}
-        </span>
+        <div className="flex items-center gap-2">
+          {isCleared ? (
+            <span
+              className="inline-block size-1.5 shrink-0 rounded-full bg-emerald-400"
+              aria-label="Cleared"
+              title="Cleared"
+            />
+          ) : (
+            <span
+              className="inline-block size-1.5 shrink-0 rounded-full bg-white/30"
+              aria-label="Uncleared"
+              title="Uncleared"
+            />
+          )}
+          <span className="truncate text-sm font-medium">
+            {txn.payeeName ?? <span className="text-white/40">(no payee)</span>}
+          </span>
+        </div>
         <span className="truncate text-xs text-white/40">
           {formatHumanDate(txn.date)}
           {category ? <> · {category.name}</> : txn.categoryId === null ? <> · Inflow</> : null}
@@ -144,6 +182,6 @@ function TxnRow({
       >
         {formatCentsSigned(txn.amountCents, currency)}
       </span>
-    </div>
+    </>
   );
 }

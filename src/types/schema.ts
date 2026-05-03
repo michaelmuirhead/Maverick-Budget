@@ -15,8 +15,11 @@ import type { Timestamp } from "firebase/firestore";
 //     categories/{categoryId}                   → CategoryDoc
 //     transactions/{transactionId}              → TransactionDoc
 //     scheduledTransactions/{scheduledId}       → ScheduledTransactionDoc
-//     budgetMonths/{YYYY-MM}                    → BudgetMonthDoc
-//       assignments/{categoryId}                → CategoryMonthDoc (per-cat per-month $)
+//     categoryMonths/{YYYY-MM_categoryId}       → CategoryMonthDoc
+//                                                 (flat — composite ID lets one
+//                                                  subscription cover all months,
+//                                                  needed for RTA + rollover)
+//     budgetMonths/{YYYY-MM}                    → BudgetMonthDoc (cached totals)
 //     payees/{payeeId}                          → PayeeDoc
 //     plaidItems/{itemId}                       → PlaidItemDoc (when bank sync ON)
 //

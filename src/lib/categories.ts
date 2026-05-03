@@ -1,4 +1,14 @@
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import { db } from "./firebase";
 import { generateId } from "./ids";
 import type { CategoryDoc, CategoryGroupDoc } from "@/types/schema";
@@ -53,4 +63,87 @@ export async function createCategory(input: CreateCategoryInput): Promise<Catego
     updatedAt: ts,
   });
   return { ...data, createdAt: ts as any, updatedAt: ts as any };
+}
+
+// ── Edits ───────────────────────────────────────────────────────────────────
+
+export async function updateCategoryGroup(
+  householdId: string,
+  groupId: string,
+  patch: { name?: string; hidden?: boolean },
+): Promise<void> {
+  const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  if (patch.name !== undefined) data.name = patch.name.trim();
+  if (patch.hidden !== undefined) data.hidden = patch.hidden;
+  await updateDoc(doc(db, "households", householdId, "categoryGroups", groupId), data);
+}
+
+export class GroupNotEmptyError extends Error {
+  constructor(public categoryCount: number) {
+    super(
+      `This group has ${categoryCount} categor${categoryCount === 1 ? "y" : "ies"}. Move or delete them first.`,
+    );
+    this.name = "GroupNotEmptyError";
+  }
+}
+
+/** Hard-delete the group. Refuses if any categories still belong to it. */
+export async function deleteCategoryGroup(
+  householdId: string,
+  groupId: string,
+): Promise<void> {
+  const catSnap = await getDocs(
+    query(
+      collection(db, "households", householdId, "categories"),
+      where("groupId", "==", groupId),
+    ),
+  );
+  if (!catSnap.empty) {
+    throw new GroupNotEmptyError(catSnap.size);
+  }
+  await deleteDoc(doc(db, "households", householdId, "categoryGroups", groupId));
+}
+
+export async function updateCategory(
+  householdId: string,
+  categoryId: string,
+  patch: { name?: string; hidden?: boolean; note?: string | null },
+): Promise<void> {
+  const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  if (patch.name !== undefined) data.name = patch.name.trim();
+  if (patch.hidden !== undefined) data.hidden = patch.hidden;
+  if (patch.note !== undefined) data.note = patch.note;
+  await updateDoc(doc(db, "households", householdId, "categories", categoryId), data);
+}
+
+export class CategoryInUseError extends Error {
+  constructor(public transactionCount: number) {
+    super(
+      `${transactionCount} transaction${transactionCount === 1 ? "" : "s"} use this category. Hide it instead, or recategorize them first.`,
+    );
+    this.name = "CategoryInUseError";
+  }
+}
+
+/**
+ * Hard-delete a category. Refuses if any transactions reference it. The
+ * preferred soft action is `updateCategory(... { hidden: true })`.
+ */
+export async function deleteCategory(
+  householdId: string,
+  categoryId: string,
+): Promise<void> {
+  const txnSnap = await getDocs(
+    query(
+      collection(db, "households", householdId, "transactions"),
+      where("categoryId", "==", categoryId),
+    ),
+  );
+  if (!txnSnap.empty) {
+    throw new CategoryInUseError(txnSnap.size);
+  }
+  await deleteDoc(doc(db, "households", householdId, "categories", categoryId));
+  // Note: any categoryMonths/{m_categoryId} docs become orphaned. They're
+  // ignored by the budget UI (no matching category) and harmless. We can
+  // sweep them in a Cloud Function later.
 }
