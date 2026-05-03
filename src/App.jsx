@@ -215,7 +215,54 @@ function useConnectionStatus() {
   return online;
 }
 
-const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {}, nwItems: [], budgetMonths: {} };
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {}, nwItems: [], budgetMonths: {}, goals: {} };
+
+// ── Category goals ──────────────────────────────────────────────────────
+// goals shape: { [categoryNodeId]: { type: "monthly" | "target", amount: number, by?: "YYYY-MM-DD", createdAt } }
+//   "monthly": assign `amount` every month (e.g. "$500/mo for groceries")
+//   "target":  reach `amount` available by date `by` (e.g. "$5,000 emergency fund by Dec 2026")
+
+// How much more to assign THIS MONTH to stay on track for the goal.
+function getGoalNeeded(goal, assignedThisMonth, availableThroughLastMonth, monthKey) {
+  if (!goal) return 0;
+  if (goal.type === "monthly") {
+    return Math.max(0, (goal.amount || 0) - (assignedThisMonth || 0));
+  }
+  if (goal.type === "target") {
+    // Months remaining (inclusive of current) until target month
+    const tgtMonth = (goal.by || "").slice(0, 7); // "YYYY-MM"
+    if (!tgtMonth) return 0;
+    const [cy, cm] = monthKey.split("-").map(Number);
+    const [ty, tm] = tgtMonth.split("-").map(Number);
+    const monthsRemaining = (ty - cy) * 12 + (tm - cm) + 1;
+    if (monthsRemaining <= 0) {
+      // Past due — need everything not yet covered, this month
+      return Math.max(0, (goal.amount || 0) - (availableThroughLastMonth || 0));
+    }
+    const remaining = (goal.amount || 0) - (availableThroughLastMonth || 0);
+    if (remaining <= 0) return 0;
+    const monthlyContribution = remaining / monthsRemaining;
+    return Math.max(0, monthlyContribution - (assignedThisMonth || 0));
+  }
+  return 0;
+}
+
+// Short human-readable goal summary for a category row badge
+function describeGoal(goal) {
+  if (!goal) return null;
+  const amt = goal.amount || 0;
+  const fmtCompact = n => n >= 1000 ? `$${(n/1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "")}k` : `$${Math.round(n)}`;
+  if (goal.type === "monthly") return `${fmtCompact(amt)}/mo`;
+  if (goal.type === "target") {
+    const by = goal.by || "";
+    if (!by) return `${fmtCompact(amt)} target`;
+    const dt = new Date(by + "T00:00:00");
+    if (isNaN(dt)) return `${fmtCompact(amt)} target`;
+    const monthYr = dt.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+    return `${fmtCompact(amt)} by ${monthYr}`;
+  }
+  return null;
+}
 
 // ── YNAB-style budget math ───────────────────────────────────────────────
 // budgetMonths shape: { "YYYY-MM": { [categoryNodeId]: { assigned: number } } }
@@ -298,7 +345,7 @@ function useApp(user, householdId) {
       if (skipNextRemote.current) { skipNextRemote.current = false; return; }
       if (snap.exists()) {
         const r = snap.data();
-        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], customCategories: r.customCategories||[], savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{}, nwItems: r.nwItems||[], budgetMonths: r.budgetMonths||{} }));
+        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], customCategories: r.customCategories||[], savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{}, nwItems: r.nwItems||[], budgetMonths: r.budgetMonths||{}, goals: r.goals||{} }));
       }
       setSynced(true);
     }, () => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {} setSynced(true); });
@@ -383,6 +430,13 @@ function useApp(user, householdId) {
       if (Object.keys(monthMap).length === 0) delete months[month];
       else months[month] = monthMap;
       return { ...p, budgetMonths: months };
+    }), []),
+    // Per-category goal CRUD. Pass goal=null to remove.
+    setGoal: useCallback((nodeId, goal) => up(p => {
+      const goals = { ...(p.goals || {}) };
+      if (!goal) delete goals[nodeId];
+      else goals[nodeId] = { ...goal, createdAt: goals[nodeId]?.createdAt || new Date().toISOString() };
+      return { ...p, goals };
     }), []),
     // Quality-of-life: copy each category's assigned amount from one month to another.
     // Doesn't overwrite existing assignments in the destination month.
@@ -1334,7 +1388,7 @@ function BankAccountsPanel({ accounts, addAccount, updateAccount, removeAccount,
 // NODE PAGE
 // ══════════════════════════════════════════════════
 
-function NodePage({ node, parentName, nodes, entries, customCategories, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, allBankAccounts, setBankAccountsForNode, addBankAccountToNode, updateBankAccountInNode, removeBankAccountFromNode, addEntries, markAllPaid, markAllUnpaid }) {
+function NodePage({ node, parentName, nodes, entries, customCategories, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, allBankAccounts, setBankAccountsForNode, addBankAccountToNode, updateBankAccountInNode, removeBankAccountFromNode, addEntries, markAllPaid, markAllUnpaid, monthFilter, onClearMonthFilter }) {
   const [addingChild, setAddingChild] = useState(false);
   const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
   const [editingId, setEditingId] = useState(null);
@@ -1462,7 +1516,9 @@ function NodePage({ node, parentName, nodes, entries, customCategories, displayP
   let cumulative = 0; const rb = {};
   directEntries.forEach(e => { cumulative += e.type === "income" ? e.amount : -e.amount; rb[e.id] = cumulative; });
   const accountFiltered = filteredAccountId ? directEntries.filter(e => e.bankAccountId === filteredAccountId || e.transferFromId === filteredAccountId || e.transferToId === filteredAccountId) : directEntries;
-  const filtered = search ? accountFiltered.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : accountFiltered;
+  // Optional month filter (set when drilling in from the YNAB dashboard so the user lands on the same month they were viewing)
+  const monthFiltered = monthFilter ? accountFiltered.filter(e => (e.dateISO || "").startsWith(monthFilter)) : accountFiltered;
+  const filtered = search ? monthFiltered.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : monthFiltered;
 
   const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: "", dateISO: "", paid: false }); setEditingId(eid); setSearch(""); haptic(); };
   const handleImport = (e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { parseCSV(ev.target.result).forEach(p => addEntry({ id: uid(), nodeId: node.id, ...p, dateISO: todayISO(), paid: false })); }; reader.readAsText(file); e.target.value = ""; };
@@ -1478,6 +1534,22 @@ function NodePage({ node, parentName, nodes, entries, customCategories, displayP
             <button onClick={() => setAddingChild(true)} title="Add sub-budget" style={{ background: T().inputBg, border: "none", borderRadius: 8, padding: 6, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><FolderPlusSvg color="#94a3b8" size={18} /></button>
           )}
         </div>
+
+        {/* Month filter chip — set when drilling in from the dashboard. Tap × to view all-time. */}
+        {monthFilter && (() => {
+          const [y, m] = monthFilter.split("-");
+          const dt = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+          const label = dt.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+          const count = monthFiltered.length;
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: `${T().accent}10`, border: `1px solid ${T().accent}30`, borderRadius: 10, marginBottom: 12, fontSize: 11 }}>
+              <span style={{ fontSize: 13 }}>📅</span>
+              <span style={{ flex: 1, color: T().text, fontWeight: 600 }}>{label}</span>
+              <span style={{ color: T().textMuted, fontFamily: T().mono }}>{count} txn{count === 1 ? "" : "s"}</span>
+              <button onClick={() => { onClearMonthFilter && onClearMonthFilter(); haptic(); }} title="View all-time" style={{ background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+            </div>
+          );
+        })()}
 
       </div>
 
@@ -1781,9 +1853,27 @@ export default function App({ user, householdId }) {
   const [globalSearch, setGlobalSearch] = useState("");
   // YNAB-style budget dashboard
   const [budgetMonth, setBudgetMonth] = useState(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
-  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    try { const s = localStorage.getItem("maverick-collapsed-groups"); return s ? new Set(JSON.parse(s)) : new Set(); }
+    catch { return new Set(); }
+  });
+  useEffect(() => { try { localStorage.setItem("maverick-collapsed-groups", JSON.stringify([...collapsedGroups])); } catch {} }, [collapsedGroups]);
   const [editingAssigned, setEditingAssigned] = useState(null); // categoryNodeId currently being edited
   const [assignedDraft, setAssignedDraft] = useState("");
+  const [renamingNode, setRenamingNode] = useState(null); // nodeId being renamed inline
+  const [renameDraft, setRenameDraft] = useState("");
+  const [addingCategoryToGroup, setAddingCategoryToGroup] = useState(null); // groupId when inline-adding a child category
+  const [nodePageMonthFilter, setNodePageMonthFilter] = useState(null); // "YYYY-MM" when drilling from dashboard, null when navigating from Categories tab
+  // "Move money between categories" sheet — null when closed, { dstId } when open
+  const [moveMoney, setMoveMoney] = useState(null);
+  const [moveAmount, setMoveAmount] = useState("");
+  const [moveSourceId, setMoveSourceId] = useState("");
+  // Goal editor sheet — null when closed, { categoryId } when open
+  const [goalEditor, setGoalEditor] = useState(null);
+  const [goalDraft, setGoalDraft] = useState({ type: "monthly", amount: "", by: "" });
+  // Quick-add transaction sheet — null when closed
+  const [quickAdd, setQuickAdd] = useState(null);
+  const [qaDraft, setQaDraft] = useState({ type: "expense", categoryId: "", amount: "", label: "", dateISO: "" });
   const [advisorMessages, setAdvisorMessages] = useState(() => { try { const s = localStorage.getItem("maverick-advisor-msgs"); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [advisorInput, setAdvisorInput] = useState("");
   const [advisorLoading, setAdvisorLoading] = useState(false);
@@ -1813,7 +1903,7 @@ export default function App({ user, householdId }) {
   const par = navStack.length >= 2 ? d.nodes.find(n => n.id === navStack[navStack.length - 2]) : null;
   const goTo = nid => setNavStack([...navStack, nid]);
   const goBack = () => setNavStack(navStack.slice(0, -1));
-  const goHome = () => { setNavStack([]); setActiveTab("home"); setShowNetWorth(false); setShowAdvisor(false); setShowBillCalendar(false); setGlobalSearch(""); };
+  const goHome = () => { setNavStack([]); setActiveTab("home"); setShowNetWorth(false); setShowAdvisor(false); setShowBillCalendar(false); setGlobalSearch(""); setNodePageMonthFilter(null); };
 
   // Persist advisor messages
   useEffect(() => { try { localStorage.setItem("maverick-advisor-msgs", JSON.stringify(advisorMessages.slice(-50))); } catch {} }, [advisorMessages]);
@@ -2160,58 +2250,82 @@ export default function App({ user, householdId }) {
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: "transparent", border: `1px solid ${t.accent}` }} /> Today</span>
         </div>
 
-        {/* Selected day details */}
-        {selectedISO && (
-          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "14px 16px", animation: "fadeIn 0.2s ease" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>{new Date(selectedISO + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</div>
-              <button onClick={() => { setBillCalSelectedDay(null); haptic(); }} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 18, padding: 0, lineHeight: 1 }}>×</button>
-            </div>
-            {selectedEntries.length === 0 ? (
-              <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>No bills on this day.</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {selectedEntries.map(entry => {
-                  const cat = cats.find(c => c.id === entry.category);
-                  const folder = folderOf(entry.nodeId);
-                  const node = nodeById(entry.nodeId);
-                  const unpaid = entry.paid === false;
-                  return (
-                    <div key={entry.id} onClick={() => {
-                      if (entry.nodeId) {
-                        const owner = nodeById(entry.nodeId);
-                        if (owner) {
-                          const stack = [];
-                          let cur = owner;
-                          while (cur) { stack.unshift(cur.id); cur = cur.parentId ? nodeById(cur.parentId) : null; }
-                          setNavStack(stack);
-                          setShowBillCalendar(false);
-                          haptic();
-                        }
-                      }
-                    }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 10, cursor: "pointer", borderLeft: `3px solid ${unpaid ? t.exp : t.inc}` }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 14 }}>
-                        {cat ? cat.icon : "📋"}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
-                        <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {folder?.name || "—"}
-                          {node && node.id !== folder?.id ? ` › ${node.name}` : ""}
-                          {unpaid ? " · UNPAID" : " · paid"}
+        {/* Selected day — bottom-sheet overlay matching dashboard sheet pattern */}
+        {selectedISO && (() => {
+          const dayLabel = new Date(selectedISO + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+          const dayTotal = selectedEntries.reduce((s, e) => s + (e.amount || 0), 0);
+          const close = () => { setBillCalSelectedDay(null); haptic(); };
+          return (
+            <>
+              <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, animation: "fadeIn 0.15s ease" }} />
+              <div style={{
+                position: "fixed", left: "50%", bottom: 0, transform: "translateX(-50%)",
+                width: "100%", maxWidth: 500, maxHeight: "85vh", overflowY: "auto",
+                background: t.bg, borderTop: `1px solid ${t.cardBorder}`,
+                borderTopLeftRadius: 20, borderTopRightRadius: 20,
+                padding: "20px 20px calc(20px + env(safe-area-inset-bottom, 0px))",
+                zIndex: 201, animation: "slideIn 0.2s ease",
+                boxShadow: "0 -10px 30px rgba(0,0,0,0.5)",
+              }}>
+                <div style={{ width: 36, height: 4, background: t.cardBorder, borderRadius: 2, margin: "0 auto 12px" }} />
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600 }}>Bills due</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: t.text, marginTop: 2 }}>{dayLabel}</div>
+                    {selectedEntries.length > 0 && <div style={{ fontSize: 11, color: t.textMuted, marginTop: 2 }}>{selectedEntries.length} bill{selectedEntries.length === 1 ? "" : "s"} · <span style={{ fontFamily: t.mono, fontWeight: 600 }}>{fmt(dayTotal)}</span> total</div>}
+                  </div>
+                  <button onClick={close} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 22, padding: 4, lineHeight: 1 }}>×</button>
+                </div>
+
+                {selectedEntries.length === 0 ? (
+                  <div style={{ fontSize: 12, color: t.textMuted, padding: "32px 0", textAlign: "center" }}>No bills on this day.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {selectedEntries.map(entry => {
+                      const cat = cats.find(c => c.id === entry.category);
+                      const folder = folderOf(entry.nodeId);
+                      const node = nodeById(entry.nodeId);
+                      const unpaid = entry.paid === false;
+                      return (
+                        <div key={entry.id} onClick={() => {
+                          if (entry.nodeId) {
+                            const owner = nodeById(entry.nodeId);
+                            if (owner) {
+                              const stack = [];
+                              let cur = owner;
+                              while (cur) { stack.unshift(cur.id); cur = cur.parentId ? nodeById(cur.parentId) : null; }
+                              setNavStack(stack);
+                              setShowBillCalendar(false);
+                              setBillCalSelectedDay(null);
+                              haptic();
+                            }
+                          }
+                        }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 10, cursor: "pointer", borderLeft: `3px solid ${unpaid ? t.exp : t.inc}` }}>
+                          <div style={{ width: 32, height: 32, borderRadius: 8, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 14 }}>
+                            {cat ? cat.icon : "📋"}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
+                            <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {folder?.name || "—"}
+                              {node && node.id !== folder?.id ? ` › ${node.name}` : ""}
+                              {unpaid ? " · UNPAID" : " · paid"}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                            <button onClick={(ev) => { ev.stopPropagation(); app.updateEntry(entry.id, { paid: !unpaid ? false : true }); haptic(); }} title={unpaid ? "Mark paid" : "Mark unpaid"} style={{ background: unpaid ? `${t.inc}20` : `${t.exp}15`, border: `1px solid ${unpaid ? t.inc + "40" : t.exp + "30"}`, color: unpaid ? t.inc : t.exp, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>{unpaid ? "Pay" : "Unpay"}</button>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: t.exp, fontFamily: t.mono }}>-{fmt(Math.abs(entry.amount || 0))}</div>
+                          </div>
                         </div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                        <button onClick={(ev) => { ev.stopPropagation(); app.updateEntry(entry.id, { paid: !unpaid ? false : true }); haptic(); }} title={unpaid ? "Mark paid" : "Mark unpaid"} style={{ background: unpaid ? `${t.inc}20` : `${t.exp}15`, border: `1px solid ${unpaid ? t.inc + "40" : t.exp + "30"}`, color: unpaid ? t.inc : t.exp, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>{unpaid ? "Pay" : "Unpay"}</button>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: t.exp, fontFamily: t.mono }}>-{fmt(Math.abs(entry.amount || 0))}</div>
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )}
+            </>
+          );
+        })()}
       </div>
     );
   }
@@ -2270,26 +2384,24 @@ export default function App({ user, householdId }) {
       );
     };
 
-    // Render a bank-account-derived row (asset or liability). Clickable to edit, with a remove button.
+    // Render a bank-account-derived row (asset or liability). Tap opens edit sheet; × removes from owning budget folder.
     const renderBankAcct = (a, group) => {
-      const key = `${a._nodeId}:${a.id}`;
-      if (editingBankAcct === key) return <BankAcctEditForm key={key} acct={a} onDone={() => setEditingBankAcct(null)} />;
       const isLiab = group === "liability";
       const ti = ACCOUNT_TYPES.find(at => at.id === a.type) || {};
       return (
-        <div key={`bank-${a.id}`} onClick={() => { setEditingBankAcct(key); haptic(); }} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, cursor: "pointer", transition: "background 0.15s" }}
-          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div key={`bank-${a.id}`} onClick={() => { setEditingBankAcct(`${a._nodeId}:${a.id}`); haptic(); }} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderTop: `1px solid ${t.cardBorder}`, cursor: "pointer", transition: "background 0.15s" }}
+          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
             <span style={{ fontSize: 16 }}>{ti.icon || (isLiab ? "💳" : "🏦")}</span>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{a.name}</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
               <div style={{ fontSize: 10, color: t.textMuted }}>from {a._nodeName}</div>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 600, color: isLiab ? t.exp : t.inc, fontFamily: t.mono }}>{isLiab ? "-" : ""}{fmt(Math.abs(a.balance || 0))}</span>
-            <button onClick={e => { e.stopPropagation(); if (confirm(`Remove "${a.name}" from ${a._nodeName}?`)) { app.removeBankAccountFromNode(a._nodeId, a.id); if (editingBankAcct === key) setEditingBankAcct(null); haptic(15); } }} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 14, padding: "2px 4px" }}
-              onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = "#475569"}>×</button>
+            <button onClick={e => { e.stopPropagation(); if (confirm(`Remove "${a.name}" from ${a._nodeName}?`)) { app.removeBankAccountFromNode(a._nodeId, a.id); haptic(15); } }} style={{ background: "none", border: "none", color: t.textDim, cursor: "pointer", fontSize: 14, padding: "2px 4px" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = t.textDim}>×</button>
           </div>
         </div>
       );
@@ -2298,21 +2410,20 @@ export default function App({ user, householdId }) {
     const renderNwItem = (item) => {
       const ti = ACCOUNT_TYPES.find(at => at.id === item.category) || {};
       const isLiab = item.group === "liability";
-      if (editingNwItem === item.id) return <NwItemForm key={item.id} group={item.group} item={item} onSave={(updates) => { updateNwItem(item.id, updates); setEditingNwItem(null); haptic(); }} onCancel={() => setEditingNwItem(null)} />;
       return (
-        <div key={item.id} onClick={() => setEditingNwItem(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 4, cursor: "pointer", transition: "background 0.15s" }}
-          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div key={item.id} onClick={() => setEditingNwItem(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderTop: `1px solid ${t.cardBorder}`, cursor: "pointer", transition: "background 0.15s" }}
+          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
             <span style={{ fontSize: 16 }}>{ti.icon || "📋"}</span>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{item.name}</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
               <div style={{ fontSize: 10, color: t.textMuted }}>{ti.label || "Other"}</div>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 600, color: isLiab ? t.exp : t.inc, fontFamily: t.mono }}>{isLiab ? "-" : ""}{fmt(Math.abs(item.value || 0))}</span>
-            <button onClick={e => { e.stopPropagation(); if (confirm(`Remove "${item.name}"?`)) { removeNwItem(item.id); haptic(15); } }} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 14, padding: "2px 4px" }}
-              onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = "#475569"}>×</button>
+            <button onClick={e => { e.stopPropagation(); if (confirm(`Remove "${item.name}"?`)) { removeNwItem(item.id); haptic(15); } }} style={{ background: "none", border: "none", color: t.textDim, cursor: "pointer", fontSize: 14, padding: "2px 4px" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = t.textDim}>×</button>
           </div>
         </div>
       );
@@ -2353,29 +2464,70 @@ export default function App({ user, householdId }) {
           </div>
         )}
 
-        {/* Assets section */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={{ fontSize: 12, color: t.inc, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Assets — {fmt(totalAssets)}</div>
-            <button onClick={() => { setAddingNwItem("asset"); haptic(); }} style={{ background: `${t.inc}18`, border: "none", color: t.inc, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Add</button>
+        {/* Assets card */}
+        <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden", borderLeft: `3px solid ${t.inc}`, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
+            <div style={{ fontSize: 12, color: t.inc, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Assets · {fmt(totalAssets)}</div>
+            <button onClick={() => { setAddingNwItem("asset"); haptic(); }} style={{ background: `${t.inc}18`, border: "none", color: t.inc, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>+ Add</button>
           </div>
-          {addingNwItem === "asset" && <NwItemForm group="asset" onSave={(item) => { addNwItem(item); setAddingNwItem(null); haptic(); }} onCancel={() => setAddingNwItem(null)} />}
           {manualAssets.map(renderNwItem)}
           {allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).map(a => renderBankAcct(a, "asset"))}
-          {manualAssets.length === 0 && allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>Tap + Add to add your first asset</div>}
+          {manualAssets.length === 0 && allAccts.filter(a => !LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "16px 14px", textAlign: "center" }}>Tap + Add to add your first asset</div>}
         </div>
 
-        {/* Liabilities section */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={{ fontSize: 12, color: t.exp, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Liabilities — {fmt(totalLiabilities)}</div>
-            <button onClick={() => { setAddingNwItem("liability"); haptic(); }} style={{ background: `${t.exp}18`, border: "none", color: t.exp, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Add</button>
+        {/* Liabilities card */}
+        <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden", borderLeft: `3px solid ${t.exp}`, marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
+            <div style={{ fontSize: 12, color: t.exp, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Liabilities · {fmt(totalLiabilities)}</div>
+            <button onClick={() => { setAddingNwItem("liability"); haptic(); }} style={{ background: `${t.exp}18`, border: "none", color: t.exp, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>+ Add</button>
           </div>
-          {addingNwItem === "liability" && <NwItemForm group="liability" onSave={(item) => { addNwItem(item); setAddingNwItem(null); haptic(); }} onCancel={() => setAddingNwItem(null)} />}
           {manualLiabilities.map(renderNwItem)}
           {allAccts.filter(a => LIABILITY_TYPES.has(a.type)).map(a => renderBankAcct(a, "liability"))}
-          {manualLiabilities.length === 0 && allAccts.filter(a => LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "12px 0", textAlign: "center" }}>Tap + Add to add your first liability</div>}
+          {manualLiabilities.length === 0 && allAccts.filter(a => LIABILITY_TYPES.has(a.type)).length === 0 && <div style={{ fontSize: 12, color: t.textMuted, padding: "16px 14px", textAlign: "center" }}>Tap + Add to add your first liability</div>}
         </div>
+
+        {/* Net Worth item editor — bottom sheet wrapper around the existing NwItemForm / BankAcctEditForm */}
+        {(addingNwItem || editingNwItem || editingBankAcct) && (() => {
+          const close = () => { setAddingNwItem(null); setEditingNwItem(null); setEditingBankAcct(null); };
+          let body = null;
+          let titleSub = "";
+          if (addingNwItem) {
+            titleSub = addingNwItem === "asset" ? "New asset" : "New liability";
+            body = <NwItemForm group={addingNwItem} onSave={(item) => { addNwItem(item); close(); haptic(); }} onCancel={close} />;
+          } else if (editingNwItem) {
+            const item = nwItems.find(i => i.id === editingNwItem);
+            if (!item) { close(); return null; }
+            titleSub = item.group === "asset" ? "Edit asset" : "Edit liability";
+            body = <NwItemForm group={item.group} item={item} onSave={(updates) => { updateNwItem(item.id, updates); close(); haptic(); }} onCancel={close} />;
+          } else if (editingBankAcct) {
+            const [nodeId, acctId] = editingBankAcct.split(":");
+            const acct = allAccts.find(a => a._nodeId === nodeId && a.id === acctId);
+            if (!acct) { close(); return null; }
+            titleSub = "Edit bank account";
+            body = <BankAcctEditForm acct={acct} onDone={close} />;
+          }
+          return (
+            <>
+              <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, animation: "fadeIn 0.15s ease" }} />
+              <div style={{
+                position: "fixed", left: "50%", bottom: 0, transform: "translateX(-50%)",
+                width: "100%", maxWidth: 500, maxHeight: "85vh", overflowY: "auto",
+                background: t.bg, borderTop: `1px solid ${t.cardBorder}`,
+                borderTopLeftRadius: 20, borderTopRightRadius: 20,
+                padding: "16px 20px calc(20px + env(safe-area-inset-bottom, 0px))",
+                zIndex: 201, animation: "slideIn 0.2s ease",
+                boxShadow: "0 -10px 30px rgba(0,0,0,0.5)",
+              }}>
+                <div style={{ width: 36, height: 4, background: t.cardBorder, borderRadius: 2, margin: "0 auto 12px" }} />
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600 }}>{titleSub}</div>
+                  <button onClick={close} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 22, padding: 4, lineHeight: 1 }}>×</button>
+                </div>
+                {body}
+              </div>
+            </>
+          );
+        })()}
       </div>
     );
   }
@@ -2710,15 +2862,19 @@ ${context}`;
           </div>
         </div>
 
-        {/* Tool tabs */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 12, flexShrink: 0, overflowX: "auto" }}>
-          {advisorTabs.map(tab => (
-            <button key={tab.id} onClick={() => { setAdvisorTab(tab.id); haptic(); }} style={{
-              padding: "7px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", transition: "all 0.2s", display: "flex", alignItems: "center", gap: 4,
-              background: advisorTab === tab.id ? `${t.accent}25` : t.surface,
-              color: advisorTab === tab.id ? t.accentLight : t.textSub,
-            }}><span style={{ fontSize: 13 }}>{tab.icon}</span>{tab.label}</button>
-          ))}
+        {/* Tool tabs — pill style matching dashboard category pills */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexShrink: 0, overflowX: "auto", padding: "2px" }}>
+          {advisorTabs.map(tab => {
+            const sel = advisorTab === tab.id;
+            return (
+              <button key={tab.id} onClick={() => { setAdvisorTab(tab.id); haptic(); }} style={{
+                padding: "8px 14px", borderRadius: 10, cursor: "pointer", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5,
+                background: sel ? `${t.accent}18` : "rgba(255,255,255,0.02)",
+                border: sel ? `1px solid ${t.accent}50` : `1px solid ${t.cardBorder}`,
+                color: sel ? t.accentLight : t.textSub,
+              }}><span style={{ fontSize: 13 }}>{tab.icon}</span>{tab.label}</button>
+            );
+          })}
         </div>
 
         {/* Tab: Chat */}
@@ -3142,38 +3298,108 @@ ${context}`;
     );
 
     // Folder list (shared between home and budgets tab)
+    // Categories tab — dashboard-style group + nested category list. Each group is a card
+    // showing its categories underneath; tap a category to drill into its transactions.
     const folderList = (
       <>
-        <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>Folders ({roots.length})</div>
-        <div style={{ paddingBottom: 100 }}>
-          <DraggableList items={stats} onReorder={ids => app.reorderNodes(null, ids)} renderItem={(f, _i, onDragHandle) => (
-            <div onClick={() => { if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; goTo(f.id); }} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: f.archived ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.02)", borderRadius: 12, borderLeft: `4px solid ${f.color}`, cursor: "pointer", transition: "background 0.15s", opacity: f.archived ? 0.5 : 1 }}
-              onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")} onMouseLeave={e => (e.currentTarget.style.background = f.archived ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.02)")}>
-              <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: "#475569", fontSize: 16, padding: "4px 6px", touchAction: "none", userSelect: "none" }}>⠿</div>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: `${f.color}20`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><FolderSvg color={f.color} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 15, fontWeight: 600, color: T().text }}>{f.name}{f.archived && <span style={{ fontSize: 9, color: T().textMuted, marginLeft: 6 }}>archived</span>}</div><div style={{ fontSize: 11, color: T().textMuted, marginTop: 2 }}>{f.childCount} budget{f.childCount !== 1 ? "s" : ""}</div></div>
-              <span style={{ fontSize: 18, color: "#475569" }}>›</span>
-              <button onClick={e => { e.stopPropagation(); app.updateNode(f.id, { archived: !f.archived }); haptic(); }} title={f.archived ? "Unarchive" : "Archive"} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>{f.archived ? "↩" : "📦"}</button>
-              <button onClick={e => { e.stopPropagation(); if (confirm(`Delete "${f.name}"?`)) { app.removeNode(f.id); haptic(15); }}} style={{ background: "none", border: "none", color: "#334155", cursor: "pointer", fontSize: 16, padding: "2px 4px", borderRadius: 4, flexShrink: 0 }} onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")} onMouseLeave={e => (e.currentTarget.style.color = "#334155")}>×</button>
-            </div>
-          )} />
-          {archivedRootCount > 0 && !showArchivedRoot && <button onClick={() => setShowArchivedRoot(true)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: "#475569", fontSize: 11, cursor: "pointer" }}>Show {archivedRootCount} archived</button>}
-          {showArchivedRoot && archivedRootCount > 0 && <button onClick={() => setShowArchivedRoot(false)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: "#475569", fontSize: 11, cursor: "pointer" }}>Hide archived</button>}
-          {addingRoot && <div style={{ marginTop: 8 }}><InlineNew placeholder="Folder name" accentColor={PALETTE[roots.length % PALETTE.length]}
-            icon={<div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(99,102,241,0.1)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><FolderSvg color="#6366f1" /></div>}
-            onCommit={name => { app.addNode({ id: uid(), parentId: null, name, color: PALETTE[roots.length % PALETTE.length] }); setAddingRoot(false); haptic(); }} onCancel={() => setAddingRoot(false)} /></div>}
-          {!addingRoot && roots.length === 0 && <EmptyState text="No folders yet" sub="Tap below to create one" />}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Category Groups ({roots.length})</div>
+          <div style={{ fontSize: 10, color: T().textMuted }}>Tap a category to view transactions</div>
         </div>
-        <BottomBar><Btn onClick={() => setAddingRoot(true)} bg={`${T().accent}25`} color={T().accentLight}>+ New Folder</Btn></BottomBar>
+        <div style={{ paddingBottom: 100, display: "flex", flexDirection: "column", gap: 10 }}>
+          <DraggableList items={stats} onReorder={ids => app.reorderNodes(null, ids)} renderItem={(group, _i, onDragHandle) => {
+            const groupCats = d.nodes.filter(n => n.parentId === group.id && (showArchivedRoot || !n.archived));
+            return (
+              <div key={group.id} style={{ background: T().card, border: `1px solid ${T().cardBorder}`, borderRadius: 12, overflow: "hidden", borderLeft: `3px solid ${group.color || T().accent}`, opacity: group.archived ? 0.55 : 1 }}>
+                {/* Group header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
+                  <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDim, fontSize: 14, padding: "2px 6px", touchAction: "none", userSelect: "none" }}>⠿</div>
+                  <ColorPicker value={group.color || T().accent} onChange={c => app.updateNode(group.id, { color: c })} />
+                  <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                    {renamingNode === group.id ? (
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={e => setRenameDraft(e.target.value)}
+                        onBlur={() => { const v = renameDraft.trim(); if (v && v !== group.name) app.updateNode(group.id, { name: v }); setRenamingNode(null); setRenameDraft(""); }}
+                        onKeyDown={e => { if (e.key === "Enter") e.target.blur(); else if (e.key === "Escape") { setRenamingNode(null); setRenameDraft(""); } }}
+                        style={{ flex: 1, minWidth: 0, background: T().inputBg, border: `1px solid ${T().accent}60`, borderRadius: 4, padding: "4px 8px", color: T().text, fontSize: 14, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", outline: "none" }}
+                      />
+                    ) : (
+                      <>
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: T().text, textTransform: "uppercase", letterSpacing: "0.06em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{group.name}</div>
+                        {group.archived && <span style={{ fontSize: 9, color: T().textMuted }}>archived</span>}
+                        <span style={{ fontSize: 10, color: T().textMuted }}>{groupCats.length}</span>
+                        <button onClick={() => { setRenamingNode(group.id); setRenameDraft(group.name); haptic(); }} title="Rename" style={{ background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 11, padding: "0 4px", opacity: 0.5 }}>✎</button>
+                      </>
+                    )}
+                  </div>
+                  <button onClick={() => { app.updateNode(group.id, { archived: !group.archived }); haptic(); }} title={group.archived ? "Unarchive" : "Archive"} style={{ background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>{group.archived ? "↩" : "📦"}</button>
+                  <button onClick={() => { if (confirm(`Delete "${group.name}" and all its categories?`)) { app.removeNode(group.id); haptic(15); } }} style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 16, padding: "2px 4px" }} onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")} onMouseLeave={e => (e.currentTarget.style.color = T().textDim)}>×</button>
+                </div>
+
+                {/* Categories under this group */}
+                {groupCats.length > 0 && groupCats.map(cat => (
+                  <div key={cat.id} onClick={() => { goTo(cat.id); haptic(); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px 10px 30px", borderTop: `1px solid ${T().cardBorder}`, cursor: "pointer", transition: "background 0.15s", opacity: cat.archived ? 0.5 : 1 }}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: cat.color || group.color || T().accent, flexShrink: 0 }} />
+                    {renamingNode === cat.id ? (
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={e => setRenameDraft(e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        onBlur={() => { const v = renameDraft.trim(); if (v && v !== cat.name) app.updateNode(cat.id, { name: v }); setRenamingNode(null); setRenameDraft(""); }}
+                        onKeyDown={e => { if (e.key === "Enter") e.target.blur(); else if (e.key === "Escape") { setRenamingNode(null); setRenameDraft(""); } }}
+                        style={{ flex: 1, minWidth: 0, background: T().inputBg, border: `1px solid ${T().accent}60`, borderRadius: 4, padding: "2px 6px", color: T().text, fontSize: 13, outline: "none" }}
+                      />
+                    ) : (
+                      <>
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: T().text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat.name}{cat.archived && <span style={{ fontSize: 9, color: T().textMuted, marginLeft: 6 }}>archived</span>}</div>
+                        <button onClick={e => { e.stopPropagation(); setRenamingNode(cat.id); setRenameDraft(cat.name); haptic(); }} title="Rename" style={{ background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 11, padding: "0 2px", opacity: 0.4 }}>✎</button>
+                        <button onClick={e => { e.stopPropagation(); app.updateNode(cat.id, { archived: !cat.archived }); haptic(); }} title={cat.archived ? "Unarchive" : "Archive"} style={{ background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 11, padding: "0 4px" }}>{cat.archived ? "↩" : "📦"}</button>
+                        <button onClick={e => { e.stopPropagation(); if (confirm(`Delete "${cat.name}"?`)) { app.removeNode(cat.id); haptic(15); } }} style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 14, padding: "0 4px" }} onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")} onMouseLeave={e => (e.currentTarget.style.color = T().textDim)}>×</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+
+                {/* Inline add-category */}
+                {addingCategoryToGroup === group.id ? (
+                  <div onClick={e => e.stopPropagation()} style={{ borderTop: `1px solid ${T().cardBorder}`, padding: "8px 14px 8px 30px" }}>
+                    <InlineNew placeholder="Category name"
+                      accentColor={group.color || T().accent}
+                      icon={<div style={{ width: 8, height: 8, borderRadius: "50%", background: group.color || T().accent, flexShrink: 0 }} />}
+                      onCommit={name => { app.addNode({ id: uid(), parentId: group.id, name, color: group.color || PALETTE[(groupCats.length) % PALETTE.length] }); setAddingCategoryToGroup(null); haptic(); }}
+                      onCancel={() => setAddingCategoryToGroup(null)} />
+                  </div>
+                ) : (
+                  <button onClick={() => { setAddingCategoryToGroup(group.id); haptic(); }} style={{ width: "100%", padding: "8px 0", borderTop: `1px solid ${T().cardBorder}`, background: "transparent", border: "none", color: T().textMuted, fontSize: 11, fontWeight: 500, cursor: "pointer" }}>+ Add category</button>
+                )}
+              </div>
+            );
+          }} />
+
+          {archivedRootCount > 0 && !showArchivedRoot && <button onClick={() => setShowArchivedRoot(true)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: T().textDim, fontSize: 11, cursor: "pointer" }}>Show {archivedRootCount} archived</button>}
+          {showArchivedRoot && archivedRootCount > 0 && <button onClick={() => setShowArchivedRoot(false)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: T().textDim, fontSize: 11, cursor: "pointer" }}>Hide archived</button>}
+          {addingRoot && <div style={{ marginTop: 8 }}><InlineNew placeholder="Group name (e.g. Immediate Obligations)" accentColor={PALETTE[roots.length % PALETTE.length]}
+            icon={<div style={{ width: 12, height: 12, borderRadius: 3, background: PALETTE[roots.length % PALETTE.length] }} />}
+            onCommit={name => { app.addNode({ id: uid(), parentId: null, name, color: PALETTE[roots.length % PALETTE.length] }); setAddingRoot(false); haptic(); }} onCancel={() => setAddingRoot(false)} /></div>}
+          {!addingRoot && roots.length === 0 && <EmptyState text="No category groups yet" sub="Tap below to create your first group (e.g. Immediate Obligations)" />}
+        </div>
+        <BottomBar><Btn onClick={() => setAddingRoot(true)} bg={`${T().accent}25`} color={T().accentLight}>+ New Group</Btn></BottomBar>
       </>
     );
 
-    // Financial Overview charts (used on the Charts tab)
+    // Financial Overview charts (used on the Charts tab) — anchored at the dashboard's budgetMonth so users see the same period everywhere
     const chartsHero = (() => {
-      const now = new Date();
+      const [chYStr, chMStr] = budgetMonth.split("-");
+      const anchorYear = parseInt(chYStr, 10);
+      const anchorMonth = parseInt(chMStr, 10) - 1; // 0-indexed
       const months = [];
       for (let i = 5; i >= 0; i--) {
-        const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const dt = new Date(anchorYear, anchorMonth - i, 1);
         months.push({ key: `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`, label: dt.toLocaleDateString("en-US",{month:"short"}) });
       }
       const allE = d.entries || [];
@@ -3356,7 +3582,7 @@ ${context}`;
         <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
             <button onClick={() => { setActiveTab("home"); setShowSettings(false); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
-            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text, flex: 1 }}>Budgets</h1>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text, flex: 1 }}>Categories</h1>
             <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? `${t.accent}20` : t.surface, border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10, width: 36, height: 36, cursor: "pointer", fontSize: 18, color: showSettings ? t.accentLight : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>⚙</button>
           </div>
           {settingsPanel}
@@ -3366,16 +3592,32 @@ ${context}`;
       );
     }
 
-    // Tab content: Charts (Financial Overview)
+    // Tab content: Charts (Financial Overview) — anchored at the dashboard's budgetMonth so the user sees consistent periods across tabs
     if (activeTab === "charts") {
+      const [chY, chM] = budgetMonth.split("-");
+      const chDate = new Date(parseInt(chY, 10), parseInt(chM, 10) - 1, 1);
+      const chLabel = chDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      const chPrev = new Date(parseInt(chY, 10), parseInt(chM, 10) - 2, 1);
+      const chNext = new Date(parseInt(chY, 10), parseInt(chM, 10), 1);
+      const chPrevKey = `${chPrev.getFullYear()}-${String(chPrev.getMonth()+1).padStart(2,"0")}`;
+      const chNextKey = `${chNext.getFullYear()}-${String(chNext.getMonth()+1).padStart(2,"0")}`;
+      const chPrevLabel = chPrev.toLocaleDateString("en-US", { month: "short" });
+      const chNextLabel = chNext.toLocaleDateString("en-US", { month: "short" });
       return shell(
         <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
             <button onClick={() => { setActiveTab("home"); setShowSettings(false); haptic(); }} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ Home</button>
             <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: t.text, flex: 1 }}>Charts</h1>
             <button onClick={() => setShowSettings(!showSettings)} style={{ background: showSettings ? `${t.accent}20` : t.surface, border: `1px solid ${showSettings ? t.accent + "40" : t.cardBorder}`, borderRadius: 10, width: 36, height: 36, cursor: "pointer", fontSize: 18, color: showSettings ? t.accentLight : t.textSub, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }}>⚙</button>
           </div>
           {settingsPanel}
+          {/* Month picker — same shape as the dashboard's, scrolls 6-month windows backward/forward */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <button onClick={() => { setBudgetMonth(chPrevKey); haptic(); }} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>‹ {chPrevLabel}</button>
+            <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>6 months ending {chLabel}</div>
+            <button onClick={() => { setBudgetMonth(chNextKey); haptic(); }} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>{chNextLabel} ›</button>
+          </div>
+          <div style={{ fontSize: 10, color: t.textMuted, textAlign: "center", marginBottom: 14 }}>Linked to dashboard month</div>
           {chartsHero}
           <div style={{ flex: 1 }} />
           {bottomNav}
@@ -3607,21 +3849,112 @@ ${context}`;
                 </button>
               )}
 
-              {/* Ready to Assign banner */}
-              <div style={{
-                background: rtaPositive ? `linear-gradient(135deg, ${t.inc}15, ${t.inc}30)` : `linear-gradient(135deg, ${t.exp}20, ${t.exp}35)`,
-                border: `1px solid ${rtaPositive ? t.inc : t.exp}40`,
-                borderRadius: 14, padding: "16px 18px", marginBottom: 16,
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-              }}>
-                <div>
-                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 4 }}>Ready to Assign</div>
-                  <div style={{ fontSize: 11, color: rtaPositive ? t.textSub : t.exp }}>{rtaPositive ? "Give every dollar a job" : "You've assigned more than you have"}</div>
-                </div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: rtaPositive ? t.inc : t.exp, fontFamily: t.mono }}>
-                  {rtaPositive ? "" : "-"}{fmt(Math.abs(readyToAssign))}
-                </div>
-              </div>
+              {/* Ready to Assign banner + this-month context */}
+              {(() => {
+                const monthIncome = (d.entries || []).filter(e => e.type === "income" && (e.dateISO || "").startsWith(budgetMonth)).reduce((s, e) => s + (e.amount || 0), 0);
+                const monthAssigned = Object.values(monthMap).reduce((s, c) => s + (c?.assigned || 0), 0);
+                const monthSpent = groups.reduce((sum, group) => {
+                  const cats = d.nodes.filter(n => n.parentId === group.id && !n.archived);
+                  return sum + cats.reduce((s, c) => s + getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth), 0);
+                }, 0);
+                return (
+                  <div style={{
+                    background: rtaPositive ? `linear-gradient(135deg, ${t.inc}15, ${t.inc}30)` : `linear-gradient(135deg, ${t.exp}20, ${t.exp}35)`,
+                    border: `1px solid ${rtaPositive ? t.inc : t.exp}40`,
+                    borderRadius: 14, padding: "16px 18px", marginBottom: 16,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 4 }}>Ready to Assign</div>
+                        <div style={{ fontSize: 11, color: rtaPositive ? t.textSub : t.exp }}>{rtaPositive ? "Give every dollar a job" : "You've assigned more than you have"}</div>
+                        {/* Income split — show how much of RTA is fresh this-month vs rolled-over from prior periods.
+                            Only meaningful when RTA is positive (split is undefined for negative RTA). */}
+                        {rtaPositive && readyToAssign > 0 && (() => {
+                          // Cap "this month" at the smaller of (this-month income, RTA) — fresh income that hasn't been "absorbed" by RTA going negative
+                          const fresh = Math.min(monthIncome, readyToAssign);
+                          const rolled = readyToAssign - fresh;
+                          if (monthIncome === 0 || rolled === 0) return null;
+                          return (
+                            <div style={{ fontSize: 9, color: t.textMuted, marginTop: 4, fontFamily: t.mono }}>
+                              <span style={{ color: t.inc }}>{fmt(fresh)} this month</span>
+                              <span style={{ color: t.textDim }}> + </span>
+                              <span style={{ color: t.textSub }}>{fmt(rolled)} rolled over</span>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: rtaPositive ? t.inc : t.exp, fontFamily: t.mono, flexShrink: 0 }}>
+                        {rtaPositive ? "" : "-"}{fmt(Math.abs(readyToAssign))}
+                      </div>
+                    </div>
+                    {/* Month context strip */}
+                    <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${rtaPositive ? t.inc : t.exp}25`, fontSize: 10 }}>
+                      <div style={{ textAlign: "center", flex: 1 }}>
+                        <div style={{ color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 2 }}>Income</div>
+                        <div style={{ color: t.inc, fontFamily: t.mono, fontWeight: 700, fontSize: 12 }}>{fmt(monthIncome)}</div>
+                      </div>
+                      <div style={{ textAlign: "center", flex: 1, borderLeft: `1px solid ${t.cardBorder}` }}>
+                        <div style={{ color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 2 }}>Assigned</div>
+                        <div style={{ color: t.text, fontFamily: t.mono, fontWeight: 700, fontSize: 12 }}>{fmt(monthAssigned)}</div>
+                      </div>
+                      <div style={{ textAlign: "center", flex: 1, borderLeft: `1px solid ${t.cardBorder}` }}>
+                        <div style={{ color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 2 }}>Spent</div>
+                        <div style={{ color: t.exp, fontFamily: t.mono, fontWeight: 700, fontSize: 12 }}>{fmt(monthSpent)}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Auto-fund summary — only shown when there are underfunded goals */}
+              {(() => {
+                const goalsObj = d.goals || {};
+                // Walk groups in display order so we fund in the same order the user sees
+                const orderedCats = [];
+                groups.forEach(g => { d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => orderedCats.push(c)); });
+                const underfundedRows = orderedCats.map(c => {
+                  const goal = goalsObj[c.id];
+                  if (!goal) return null;
+                  const a = monthMap[c.id]?.assigned || 0;
+                  const av = getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, c.id, budgetMonth);
+                  const act = getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth);
+                  const priorBal = av - (a - act);
+                  const need = getGoalNeeded(goal, a, priorBal, budgetMonth);
+                  if (need <= 0) return null;
+                  return { cat: c, goal, currentAssigned: a, need };
+                }).filter(Boolean);
+                if (underfundedRows.length === 0) return null;
+                const totalNeeded = underfundedRows.reduce((s, r) => s + r.need, 0);
+                const canFundAll = readyToAssign >= totalNeeded;
+                const willFund = Math.min(readyToAssign, totalNeeded);
+
+                const autoFund = () => {
+                  if (readyToAssign <= 0) return;
+                  let remaining = readyToAssign;
+                  for (const r of underfundedRows) {
+                    if (remaining <= 0) break;
+                    const give = Math.min(r.need, remaining);
+                    if (give > 0) {
+                      app.setAssigned(budgetMonth, r.cat.id, r.currentAssigned + give);
+                      remaining -= give;
+                    }
+                  }
+                  haptic(15);
+                };
+
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 14, background: canFundAll ? `${t.accent}10` : `${t.exp}10`, border: `1px solid ${canFundAll ? t.accent + "30" : t.exp + "30"}`, borderRadius: 12 }}>
+                    <span style={{ fontSize: 16 }}>🎯</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>{underfundedRows.length} goal{underfundedRows.length === 1 ? "" : "s"} underfunded</div>
+                      <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>{fmt(totalNeeded)} needed{!canFundAll && readyToAssign > 0 ? ` · ${fmt(willFund)} available to fund` : ""}{readyToAssign <= 0 ? " · no money to assign" : ""}</div>
+                    </div>
+                    <button onClick={autoFund} disabled={readyToAssign <= 0} style={{ background: readyToAssign <= 0 ? t.cardBorder : t.accent, border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", cursor: readyToAssign <= 0 ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, opacity: readyToAssign <= 0 ? 0.5 : 1, flexShrink: 0 }}>
+                      Auto-fund
+                    </button>
+                  </div>
+                );
+              })()}
 
               {/* Category groups */}
               <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
@@ -3636,11 +3969,29 @@ ${context}`;
                   return (
                     <div key={group.id} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
                       {/* Group header */}
-                      <div onClick={toggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", cursor: "pointer", borderLeft: `3px solid ${group.color || t.accent}`, background: "rgba(255,255,255,0.02)" }}>
+                      <div onClick={renamingNode === group.id ? undefined : toggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", cursor: renamingNode === group.id ? "default" : "pointer", borderLeft: `3px solid ${group.color || t.accent}`, background: "rgba(255,255,255,0.02)" }}>
                         <span style={{ fontSize: 11, color: t.textMuted, transition: "transform 0.15s", display: "inline-block", transform: collapsed ? "rotate(-90deg)" : "rotate(0)" }}>▾</span>
                         <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: t.text, textTransform: "uppercase", letterSpacing: "0.06em" }}>{group.name}</div>
-                          <span style={{ fontSize: 10, color: t.textMuted }}>{categories.length}</span>
+                          {renamingNode === group.id ? (
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              onChange={e => setRenameDraft(e.target.value)}
+                              onClick={e => e.stopPropagation()}
+                              onBlur={() => { const v = renameDraft.trim(); if (v && v !== group.name) app.updateNode(group.id, { name: v }); setRenamingNode(null); setRenameDraft(""); }}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") e.target.blur();
+                                else if (e.key === "Escape") { setRenamingNode(null); setRenameDraft(""); }
+                              }}
+                              style={{ flex: 1, minWidth: 0, background: t.inputBg, border: `1px solid ${t.accent}60`, borderRadius: 4, padding: "2px 6px", color: t.text, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", outline: "none" }}
+                            />
+                          ) : (
+                            <>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: t.text, textTransform: "uppercase", letterSpacing: "0.06em" }}>{group.name}</div>
+                              <span style={{ fontSize: 10, color: t.textMuted }}>{categories.length}</span>
+                              <button onClick={e => { e.stopPropagation(); setRenamingNode(group.id); setRenameDraft(group.name); haptic(); }} title="Rename" style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 11, padding: "0 4px", opacity: 0.5 }} onMouseEnter={e => e.currentTarget.style.opacity = "1"} onMouseLeave={e => e.currentTarget.style.opacity = "0.5"}>✎</button>
+                            </>
+                          )}
                         </div>
                         <div style={{ fontSize: 11, color: t.textSub, fontFamily: t.mono, display: "flex", gap: 12 }}>
                           <span title="Assigned this month">{fmt(groupAssigned)}</span>
@@ -3661,20 +4012,56 @@ ${context}`;
                             const fullyFunded = assigned > 0 && activity >= assigned && !overspent;
                             const editing = editingAssigned === cat.id;
                             const pct = assigned > 0 ? Math.min(100, (activity / assigned) * 100) : 0;
+                            const goal = (d.goals || {})[cat.id];
+                            const goalDesc = describeGoal(goal);
+                            // For target-type goals, the rolling balance from PRIOR months counts toward the goal.
+                            const availableThroughLastMonth = available - (assigned - activity);
+                            const goalNeeded = goal ? getGoalNeeded(goal, assigned, availableThroughLastMonth, budgetMonth) : 0;
+                            const goalUnderfunded = goal && goalNeeded > 0;
 
                             return (
                               <div key={cat.id} style={{ borderTop: `1px solid ${t.cardBorder}` }}>
                                 <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", gap: 10 }}>
-                                  {/* Name + tap-to-drill */}
-                                  <div onClick={() => { goTo(cat.id); haptic(); }} style={{ flex: 1, minWidth: 0, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+                                  {/* Name + tap-to-drill (rename when in rename mode). Drilling from dashboard pre-applies the displayed month as a filter. */}
+                                  <div onClick={renamingNode === cat.id ? undefined : () => { setNodePageMonthFilter(budgetMonth); goTo(cat.id); haptic(); }} style={{ flex: 1, minWidth: 0, cursor: renamingNode === cat.id ? "default" : "pointer", display: "flex", alignItems: "center", gap: 8 }}>
                                     <div style={{ width: 8, height: 8, borderRadius: "50%", background: cat.color || t.accent, flexShrink: 0 }} />
-                                    <div style={{ minWidth: 0 }}>
-                                      <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat.name}</div>
-                                      {(activity > 0 || assigned > 0) && (
-                                        <div style={{ fontSize: 9, color: t.textMuted, fontFamily: t.mono, marginTop: 2 }}>
-                                          {fmt(activity)} of {fmt(assigned)}
+                                    <div style={{ minWidth: 0, flex: 1 }}>
+                                      {renamingNode === cat.id ? (
+                                        <input
+                                          autoFocus
+                                          value={renameDraft}
+                                          onChange={e => setRenameDraft(e.target.value)}
+                                          onClick={e => e.stopPropagation()}
+                                          onBlur={() => { const v = renameDraft.trim(); if (v && v !== cat.name) app.updateNode(cat.id, { name: v }); setRenamingNode(null); setRenameDraft(""); }}
+                                          onKeyDown={e => {
+                                            if (e.key === "Enter") e.target.blur();
+                                            else if (e.key === "Escape") { setRenamingNode(null); setRenameDraft(""); }
+                                          }}
+                                          style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.accent}60`, borderRadius: 4, padding: "2px 6px", color: t.text, fontSize: 13, fontWeight: 500, outline: "none" }}
+                                        />
+                                      ) : (
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                          <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{cat.name}</div>
+                                          <button onClick={e => { e.stopPropagation(); setRenamingNode(cat.id); setRenameDraft(cat.name); haptic(); }} title="Rename" style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 11, padding: "0 2px", opacity: 0.4, flexShrink: 0 }} onMouseEnter={e => e.currentTarget.style.opacity = "1"} onMouseLeave={e => e.currentTarget.style.opacity = "0.4"}>✎</button>
                                         </div>
                                       )}
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
+                                        {(activity > 0 || assigned > 0) && (
+                                          <span style={{ fontSize: 9, color: t.textMuted, fontFamily: t.mono }}>
+                                            {fmt(activity)} of {fmt(assigned)}
+                                          </span>
+                                        )}
+                                        {goal && (
+                                          <button onClick={(ev) => { ev.stopPropagation(); setGoalEditor({ categoryId: cat.id }); setGoalDraft({ type: goal.type, amount: String(goal.amount || ""), by: goal.by || "" }); haptic(); }} style={{ background: goalUnderfunded ? `${t.exp}15` : `${t.inc}12`, border: `1px solid ${goalUnderfunded ? t.exp : t.inc}30`, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: goalUnderfunded ? t.exp : t.inc, cursor: "pointer", fontFamily: t.mono, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                            🎯 {goalDesc}{goalUnderfunded ? ` · +${fmt(goalNeeded).replace("$", "$")}` : ""}
+                                          </button>
+                                        )}
+                                        {!goal && (
+                                          <button onClick={(ev) => { ev.stopPropagation(); setGoalEditor({ categoryId: cat.id }); setGoalDraft({ type: "monthly", amount: "", by: "" }); haptic(); }} style={{ background: "transparent", border: `1px dashed ${t.cardBorder}`, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: t.textMuted, cursor: "pointer", fontWeight: 500 }}>
+                                            + Goal
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
 
@@ -3702,13 +4089,62 @@ ${context}`;
                                     )}
                                   </div>
 
-                                  {/* Available */}
-                                  <div style={{ width: 80, textAlign: "right" }}>
+                                  {/* Available — tap to move money. When overspent, auto-suggest the highest-available eligible source. */}
+                                  <button onClick={() => {
+                                    setMoveMoney({ dstId: cat.id });
+                                    setMoveAmount(overspent ? String(Math.abs(available).toFixed(2)) : "");
+                                    if (overspent) {
+                                      // Find best suggested source: highest available balance among other categories
+                                      const allCats = [];
+                                      groups.forEach(g => { d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => allCats.push(c)); });
+                                      const candidates = allCats
+                                        .filter(c => c.id !== cat.id)
+                                        .map(c => ({ id: c.id, av: getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, c.id, budgetMonth) }))
+                                        .filter(s => s.av > 0)
+                                        .sort((a, b) => b.av - a.av);
+                                      setMoveSourceId(candidates.length > 0 ? candidates[0].id : "");
+                                    } else {
+                                      setMoveSourceId("");
+                                    }
+                                    haptic();
+                                  }} style={{ width: 80, textAlign: "right", background: overspent ? `${t.exp}10` : "transparent", border: overspent ? `1px solid ${t.exp}30` : "1px solid transparent", borderRadius: 6, padding: "3px 6px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
                                     <div style={{ fontSize: 13, fontWeight: 700, color: overspent ? t.exp : fullyFunded ? t.textMuted : t.inc, fontFamily: t.mono }}>
                                       {overspent ? "-" : ""}{fmt(Math.abs(available))}
                                     </div>
-                                  </div>
+                                    {overspent && <div style={{ fontSize: 8, color: t.exp, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 1 }}>Cover ›</div>}
+                                  </button>
                                 </div>
+
+                                {/* Quick-assign presets — only while editing this row's assigned input */}
+                                {editing && (() => {
+                                  const lastMo = (budgetMonthsObj[prevKey] || {})[cat.id]?.assigned;
+                                  // Average of last 3 calendar months' activity (excluding current)
+                                  let avg3Total = 0;
+                                  for (let i = 1; i <= 3; i++) {
+                                    const dt = new Date(yearN, monthN - i, 1);
+                                    const k = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`;
+                                    avg3Total += getCategoryActivity(d.nodes, d.entries, cat.id, k);
+                                  }
+                                  const avg3 = avg3Total / 3;
+                                  const presets = [
+                                    goal && goalNeeded > 0 && { label: "Apply goal", value: assigned + goalNeeded },
+                                    lastMo != null && lastMo > 0 && { label: "Last month", value: lastMo },
+                                    activity > 0 && { label: "Spent so far", value: activity },
+                                    avg3 > 0 && { label: "Avg 3mo", value: Math.round(avg3 * 100) / 100 },
+                                  ].filter(Boolean);
+                                  if (presets.length === 0) return null;
+                                  return (
+                                    // onMouseDown intercept so blur doesn't fire on the input before the chip click registers
+                                    <div onMouseDown={ev => ev.preventDefault()} style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 14px 10px 30px", animation: "fadeIn 0.15s ease" }}>
+                                      {presets.map(p => (
+                                        <button key={p.label} onClick={() => { setAssignedDraft(String(p.value)); haptic(); }} style={{ background: `${t.accent}15`, border: `1px solid ${t.accent}30`, color: t.accentLight, borderRadius: 12, padding: "4px 10px", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                          {p.label}
+                                          <span style={{ fontFamily: t.mono, opacity: 0.85 }}>{fmt(p.value)}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  );
+                                })()}
 
                                 {/* Progress bar (when assigned > 0) */}
                                 {assigned > 0 && (
@@ -3731,6 +4167,56 @@ ${context}`;
                 <span style={{ width: 70, textAlign: "right" }}>Assigned</span>
                 <span style={{ width: 80, textAlign: "right" }}>Available</span>
               </div>
+
+              {/* Spending by Category — top categories for the displayed month, sorted descending */}
+              {(() => {
+                const allCats = [];
+                groups.forEach(g => { d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => allCats.push(c)); });
+                const rows = allCats
+                  .map(c => ({ cat: c, spent: getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth) }))
+                  .filter(r => r.spent > 0)
+                  .sort((a, b) => b.spent - a.spent);
+                if (rows.length === 0) return null;
+                const totalSpent = rows.reduce((s, r) => s + r.spent, 0);
+                const top = rows.slice(0, 6);
+                const max = top[0].spent || 1;
+                const monthShort = monthDate.toLocaleDateString("en-US", { month: "short" });
+
+                return (
+                  <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600 }}>Spending — {monthShort}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted, fontFamily: t.mono }}>Total {fmt(totalSpent)}</div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {top.map(r => {
+                        const pct = (r.spent / max) * 100;
+                        const sharePct = totalSpent > 0 ? Math.round((r.spent / totalSpent) * 100) : 0;
+                        return (
+                          <div key={r.cat.id} onClick={() => { setNodePageMonthFilter(budgetMonth); goTo(r.cat.id); haptic(); }} style={{ cursor: "pointer" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
+                                <div style={{ width: 6, height: 6, borderRadius: "50%", background: r.cat.color || t.accent, flexShrink: 0 }} />
+                                <div style={{ fontSize: 11, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.cat.name}</div>
+                                <span style={{ fontSize: 9, color: t.textMuted, flexShrink: 0 }}>{sharePct}%</span>
+                              </div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: t.text, fontFamily: t.mono, flexShrink: 0 }}>{fmt(r.spent)}</div>
+                            </div>
+                            <div style={{ height: 4, background: "rgba(255,255,255,0.04)", borderRadius: 2, overflow: "hidden" }}>
+                              <div style={{ width: `${pct}%`, height: "100%", background: r.cat.color || t.accent, opacity: 0.8, transition: "width 0.4s ease" }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {rows.length > 6 && (
+                      <div style={{ marginTop: 8, fontSize: 10, color: t.textMuted, textAlign: "center" }}>
+                        + {rows.length - 6} more · {fmt(rows.slice(6).reduce((s, r) => s + r.spent, 0))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </>
           );
         })()}
@@ -3783,6 +4269,429 @@ ${context}`;
         {/* Spacer for bottom nav */}
         <div style={{ flex: 1 }} />
 
+        {/* Floating + button — quick-add a transaction without drilling into a category */}
+        {!quickAdd && !goalEditor && !moveMoney && allRoots.filter(n => !n.archived).length > 0 && (
+          <button
+            onClick={() => {
+              const today = new Date();
+              const iso = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+              // Default to first category if exists
+              const firstGroup = allRoots.find(n => !n.archived);
+              const firstCat = firstGroup ? d.nodes.find(n => n.parentId === firstGroup.id && !n.archived) : null;
+              setQaDraft({ type: "expense", categoryId: firstCat?.id || "", amount: "", label: "", dateISO: iso });
+              setQuickAdd(true);
+              haptic();
+            }}
+            style={{
+              position: "fixed", right: 20, bottom: "calc(78px + env(safe-area-inset-bottom, 0px))",
+              width: 56, height: 56, borderRadius: 28,
+              background: t.accent, color: "#fff", border: "none",
+              fontSize: 28, fontWeight: 300, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: `0 6px 16px ${t.accent}50, 0 2px 4px rgba(0,0,0,0.3)`,
+              zIndex: 99,
+              transition: "transform 0.15s",
+            }}
+            onMouseDown={e => e.currentTarget.style.transform = "scale(0.92)"}
+            onMouseUp={e => e.currentTarget.style.transform = "scale(1)"}
+            onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
+            title="Add a transaction"
+          >＋</button>
+        )}
+
+        {/* Quick-add transaction sheet */}
+        {quickAdd && (() => {
+          const close = () => { setQuickAdd(null); };
+          const amtNum = parseFloat(qaDraft.amount) || 0;
+          const valid = amtNum > 0 && qaDraft.categoryId && qaDraft.dateISO;
+          // Build flat category list (group › category) for the picker
+          const cats = (() => {
+            const out = [];
+            allRoots.filter(n => !n.archived).forEach(g => {
+              d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => out.push({ id: c.id, label: c.name, group: g.name, color: c.color }));
+            });
+            return out;
+          })();
+          const submit = () => {
+            if (!valid) return;
+            const dateStr = (() => {
+              const dt = new Date(qaDraft.dateISO + "T00:00:00");
+              return isNaN(dt) ? qaDraft.dateISO : fmtDate(qaDraft.dateISO);
+            })();
+            // Income that lands on a folder still feeds Ready to Assign per dashboard math.
+            // We store category as "income" for income type, "other" for expense default.
+            const category = qaDraft.type === "income" ? "income" : "other";
+            app.addEntry({
+              id: uid(),
+              nodeId: qaDraft.categoryId,
+              label: qaDraft.label.trim(),
+              amount: amtNum,
+              category,
+              type: qaDraft.type,
+              date: dateStr,
+              dateISO: qaDraft.dateISO,
+              paid: true,
+            });
+            haptic(15);
+            close();
+          };
+          return (
+            <>
+              <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, animation: "fadeIn 0.15s ease" }} />
+              <div style={{
+                position: "fixed", left: "50%", bottom: 0, transform: "translateX(-50%)",
+                width: "100%", maxWidth: 500, maxHeight: "85vh", overflowY: "auto",
+                background: t.bg, borderTop: `1px solid ${t.cardBorder}`,
+                borderTopLeftRadius: 20, borderTopRightRadius: 20,
+                padding: "20px 20px calc(20px + env(safe-area-inset-bottom, 0px))",
+                zIndex: 201, animation: "slideIn 0.2s ease",
+                boxShadow: "0 -10px 30px rgba(0,0,0,0.5)",
+              }}>
+                <div style={{ width: 36, height: 4, background: t.cardBorder, borderRadius: 2, margin: "0 auto 12px" }} />
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: t.text }}>Quick add</div>
+                  <button onClick={close} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 22, padding: 4, lineHeight: 1 }}>×</button>
+                </div>
+
+                {/* Type toggle */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 14, background: t.surface, padding: 4, borderRadius: 10, border: `1px solid ${t.cardBorder}` }}>
+                  {[
+                    { id: "expense", label: "Expense", color: t.exp },
+                    { id: "income", label: "Income", color: t.inc },
+                  ].map(opt => {
+                    const sel = qaDraft.type === opt.id;
+                    return (
+                      <button key={opt.id} onClick={() => { setQaDraft({ ...qaDraft, type: opt.id }); haptic(); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: sel ? `${opt.color}25` : "transparent", color: sel ? opt.color : t.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Amount */}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: t.textMuted, fontSize: 18, fontWeight: 600 }}>$</span>
+                    <input
+                      autoFocus
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      value={qaDraft.amount}
+                      onChange={e => setQaDraft({ ...qaDraft, amount: e.target.value })}
+                      placeholder="0.00"
+                      style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "14px 14px 14px 30px", color: t.text, fontSize: 22, fontWeight: 700, fontFamily: t.mono, outline: "none", textAlign: "right" }}
+                    />
+                  </div>
+                </div>
+
+                {/* Label */}
+                <input
+                  value={qaDraft.label}
+                  onChange={e => setQaDraft({ ...qaDraft, label: e.target.value })}
+                  placeholder="What for? (optional)"
+                  style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none", marginBottom: 12 }}
+                />
+
+                {/* Category picker */}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Category</div>
+                  {cats.length === 0 ? (
+                    <div style={{ background: `${t.exp}10`, border: `1px solid ${t.exp}30`, borderRadius: 10, padding: "12px 14px", fontSize: 12, color: t.textSub }}>
+                      No categories yet. Create one in the Categories tab first.
+                    </div>
+                  ) : (
+                    <select
+                      value={qaDraft.categoryId}
+                      onChange={e => setQaDraft({ ...qaDraft, categoryId: e.target.value })}
+                      style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none" }}
+                    >
+                      {cats.map(c => <option key={c.id} value={c.id}>{c.group} › {c.label}</option>)}
+                    </select>
+                  )}
+                </div>
+
+                {/* Date */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Date</div>
+                  <input
+                    type="date"
+                    value={qaDraft.dateISO}
+                    onChange={e => setQaDraft({ ...qaDraft, dateISO: e.target.value })}
+                    style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none" }}
+                  />
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={close} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "transparent", color: t.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                  <button onClick={submit} disabled={!valid} style={{ flex: 2, padding: "12px 0", borderRadius: 10, border: "none", background: valid ? t.accent : t.cardBorder, color: "#fff", fontSize: 13, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed", opacity: valid ? 1 : 0.5 }}>
+                    Add {qaDraft.type === "income" ? "income" : "expense"}{amtNum > 0 ? ` · ${fmt(amtNum)}` : ""}
+                  </button>
+                </div>
+              </div>
+            </>
+          );
+        })()}
+
+        {/* Goal editor sheet — set/edit/remove a per-category goal */}
+        {goalEditor && (() => {
+          const cat = d.nodes.find(n => n.id === goalEditor.categoryId);
+          if (!cat) return null;
+          const existingGoal = (d.goals || {})[cat.id];
+          const close = () => { setGoalEditor(null); setGoalDraft({ type: "monthly", amount: "", by: "" }); };
+          const amtNum = parseFloat(goalDraft.amount) || 0;
+          const valid = amtNum > 0 && (goalDraft.type === "monthly" || (goalDraft.type === "target" && goalDraft.by));
+          const save = () => {
+            if (!valid) return;
+            const goal = { type: goalDraft.type, amount: amtNum };
+            if (goalDraft.type === "target") goal.by = goalDraft.by;
+            app.setGoal(cat.id, goal);
+            haptic();
+            close();
+          };
+          const remove = () => { app.setGoal(cat.id, null); haptic(15); close(); };
+
+          return (
+            <>
+              <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, animation: "fadeIn 0.15s ease" }} />
+              <div style={{
+                position: "fixed", left: "50%", bottom: 0, transform: "translateX(-50%)",
+                width: "100%", maxWidth: 500, maxHeight: "85vh", overflowY: "auto",
+                background: t.bg, borderTop: `1px solid ${t.cardBorder}`,
+                borderTopLeftRadius: 20, borderTopRightRadius: 20,
+                padding: "20px 20px calc(20px + env(safe-area-inset-bottom, 0px))",
+                zIndex: 201, animation: "slideIn 0.2s ease",
+                boxShadow: "0 -10px 30px rgba(0,0,0,0.5)",
+              }}>
+                <div style={{ width: 36, height: 4, background: t.cardBorder, borderRadius: 2, margin: "0 auto 12px" }} />
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600 }}>{existingGoal ? "Edit goal" : "Set a goal for"}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: t.text, marginTop: 2 }}>🎯 {cat.name}</div>
+                  </div>
+                  <button onClick={close} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 22, padding: 4, lineHeight: 1 }}>×</button>
+                </div>
+
+                {/* Goal type picker */}
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Goal type</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[
+                      { id: "monthly", label: "Monthly", sub: "Assign every month" },
+                      { id: "target", label: "Target", sub: "Reach by date" },
+                    ].map(opt => {
+                      const selected = goalDraft.type === opt.id;
+                      return (
+                        <button key={opt.id} onClick={() => { setGoalDraft({ ...goalDraft, type: opt.id }); haptic(); }} style={{
+                          flex: 1, padding: "10px 8px", borderRadius: 10,
+                          background: selected ? `${t.accent}18` : "rgba(255,255,255,0.02)",
+                          border: selected ? `1px solid ${t.accent}50` : `1px solid ${t.cardBorder}`,
+                          cursor: "pointer", textAlign: "center",
+                        }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: selected ? t.accentLight : t.text }}>{opt.label}</div>
+                          <div style={{ fontSize: 10, color: t.textMuted, marginTop: 2 }}>{opt.sub}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Amount */}
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>
+                    {goalDraft.type === "monthly" ? "Assign every month" : "Target balance"}
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: t.textMuted, fontSize: 18, fontWeight: 600 }}>$</span>
+                    <input
+                      autoFocus
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      value={goalDraft.amount}
+                      onChange={e => setGoalDraft({ ...goalDraft, amount: e.target.value })}
+                      placeholder="0.00"
+                      style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "14px 14px 14px 30px", color: t.text, fontSize: 22, fontWeight: 700, fontFamily: t.mono, outline: "none", textAlign: "right" }}
+                    />
+                  </div>
+                </div>
+
+                {/* Date (only for target type) */}
+                {goalDraft.type === "target" && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>By date</div>
+                    <input
+                      type="date"
+                      value={goalDraft.by}
+                      onChange={e => setGoalDraft({ ...goalDraft, by: e.target.value })}
+                      style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none" }}
+                    />
+                    {goalDraft.by && amtNum > 0 && (() => {
+                      const [cy, cm] = budgetMonth.split("-").map(Number);
+                      const tgtMonth = goalDraft.by.slice(0, 7);
+                      const [ty, tm] = tgtMonth.split("-").map(Number);
+                      const monthsRem = (ty - cy) * 12 + (tm - cm) + 1;
+                      if (monthsRem <= 0) return <div style={{ fontSize: 10, color: t.exp, marginTop: 6 }}>⚠ Date is in the past — full amount needed this month</div>;
+                      const perMonth = amtNum / monthsRem;
+                      return <div style={{ fontSize: 10, color: t.textMuted, marginTop: 6 }}>≈ {fmt(perMonth)}/month for {monthsRem} month{monthsRem === 1 ? "" : "s"}</div>;
+                    })()}
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: 8 }}>
+                  {existingGoal && <button onClick={remove} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${t.exp}30`, background: `${t.exp}10`, color: t.exp, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Remove</button>}
+                  <button onClick={close} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "transparent", color: t.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                  <button onClick={save} disabled={!valid} style={{ flex: 2, padding: "12px 0", borderRadius: 10, border: "none", background: valid ? t.accent : t.cardBorder, color: "#fff", fontSize: 13, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed", opacity: valid ? 1 : 0.5 }}>
+                    {existingGoal ? "Update goal" : "Save goal"}
+                  </button>
+                </div>
+              </div>
+            </>
+          );
+        })()}
+
+        {/* Move Money sheet — modal overlay. Lets user reallocate assigned $ between categories in the current month. */}
+        {moveMoney && (() => {
+          const dst = d.nodes.find(n => n.id === moveMoney.dstId);
+          if (!dst) return null;
+          const dstParent = d.nodes.find(n => n.id === dst.parentId);
+          const dstAvailable = getCategoryAvailable(d.nodes, d.entries, d.budgetMonths || {}, dst.id, budgetMonth);
+          const monthMap = (d.budgetMonths || {})[budgetMonth] || {};
+
+          // Eligible sources: every other non-archived category (child of a root) with available > 0
+          const allCategories = d.nodes.filter(n => n.parentId && !n.archived && d.nodes.find(p => p.id === n.parentId && p.parentId === null));
+          const sources = allCategories
+            .filter(c => c.id !== dst.id)
+            .map(c => ({ cat: c, available: getCategoryAvailable(d.nodes, d.entries, d.budgetMonths || {}, c.id, budgetMonth), parent: d.nodes.find(p => p.id === c.parentId) }))
+            .filter(s => s.available > 0)
+            .sort((a, b) => b.available - a.available);
+
+          const close = () => { setMoveMoney(null); setMoveAmount(""); setMoveSourceId(""); };
+          const amountNum = parseFloat(moveAmount) || 0;
+          const selectedSrc = sources.find(s => s.cat.id === moveSourceId);
+          const canSubmit = selectedSrc && amountNum > 0;
+
+          const submit = () => {
+            if (!canSubmit) return;
+            const srcCurrentAssigned = monthMap[selectedSrc.cat.id]?.assigned || 0;
+            const dstCurrentAssigned = monthMap[dst.id]?.assigned || 0;
+            // Move = subtract from src.assigned, add to dst.assigned, in this month only.
+            // Negative resulting assignments are allowed (YNAB's behavior — represents pulling from prior-month surplus).
+            app.setAssigned(budgetMonth, selectedSrc.cat.id, srcCurrentAssigned - amountNum);
+            app.setAssigned(budgetMonth, dst.id, dstCurrentAssigned + amountNum);
+            haptic(15);
+            close();
+          };
+
+          return (
+            <>
+              {/* Backdrop */}
+              <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, animation: "fadeIn 0.15s ease" }} />
+              {/* Sheet */}
+              <div style={{
+                position: "fixed", left: "50%", bottom: 0, transform: "translateX(-50%)",
+                width: "100%", maxWidth: 500, maxHeight: "85vh", overflowY: "auto",
+                background: t.bg, borderTop: `1px solid ${t.cardBorder}`,
+                borderTopLeftRadius: 20, borderTopRightRadius: 20,
+                padding: "20px 20px calc(20px + env(safe-area-inset-bottom, 0px))",
+                zIndex: 201, animation: "slideIn 0.2s ease",
+                boxShadow: "0 -10px 30px rgba(0,0,0,0.5)",
+              }}>
+                {/* Drag handle */}
+                <div style={{ width: 36, height: 4, background: t.cardBorder, borderRadius: 2, margin: "0 auto 12px" }} />
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600 }}>Move money to</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: t.text, marginTop: 2 }}>{dst.name}</div>
+                    <div style={{ fontSize: 11, color: t.textMuted }}>
+                      {dstParent ? `${dstParent.name} · ` : ""}Available: <span style={{ color: dstAvailable < 0 ? t.exp : t.inc, fontFamily: t.mono, fontWeight: 600 }}>{dstAvailable < 0 ? "-" : ""}{fmt(Math.abs(dstAvailable))}</span>
+                    </div>
+                  </div>
+                  <button onClick={close} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 22, padding: 4, lineHeight: 1 }}>×</button>
+                </div>
+
+                {/* Amount input */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Amount</div>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: t.textMuted, fontSize: 18, fontWeight: 600 }}>$</span>
+                    <input
+                      autoFocus
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      value={moveAmount}
+                      onChange={e => setMoveAmount(e.target.value)}
+                      placeholder="0.00"
+                      style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "14px 14px 14px 30px", color: t.text, fontSize: 22, fontWeight: 700, fontFamily: t.mono, outline: "none", textAlign: "right" }}
+                    />
+                  </div>
+                </div>
+
+                {/* Source picker */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>From</div>
+                  {sources.length === 0 ? (
+                    <div style={{ background: `${t.exp}10`, border: `1px solid ${t.exp}30`, borderRadius: 10, padding: "12px 14px", fontSize: 12, color: t.textSub }}>
+                      No category has any available money to move. Increase Ready-to-Assign by adding income, or reduce another category's assignment first.
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 240, overflowY: "auto" }}>
+                      {sources.map((s, i) => {
+                        const selected = moveSourceId === s.cat.id;
+                        // First source (i === 0) is the auto-suggested one (sources are pre-sorted by available desc)
+                        const suggested = i === 0 && sources.length > 1;
+                        return (
+                          <button key={s.cat.id} onClick={() => { setMoveSourceId(s.cat.id); if (!moveAmount) setMoveAmount(String(Math.min(s.available, amountNum > 0 ? amountNum : s.available).toFixed(2))); haptic(); }}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                              background: selected ? `${t.accent}18` : "rgba(255,255,255,0.02)",
+                              border: selected ? `1px solid ${t.accent}50` : `1px solid ${t.cardBorder}`,
+                              borderRadius: 10, cursor: "pointer", textAlign: "left",
+                            }}>
+                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.cat.color || t.accent, flexShrink: 0 }} />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.cat.name}</div>
+                                {suggested && <span style={{ fontSize: 8, color: t.accent, background: `${t.accent}20`, border: `1px solid ${t.accent}40`, borderRadius: 3, padding: "1px 5px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", flexShrink: 0 }}>Suggested</span>}
+                              </div>
+                              <div style={{ fontSize: 10, color: t.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.parent?.name || ""}</div>
+                            </div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: t.inc, fontFamily: t.mono, flexShrink: 0 }}>{fmt(s.available)}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Warning if amount > source available */}
+                {selectedSrc && amountNum > selectedSrc.available && (
+                  <div style={{ background: `${t.exp}10`, border: `1px solid ${t.exp}30`, borderRadius: 8, padding: "8px 12px", fontSize: 11, color: t.exp, marginBottom: 12 }}>
+                    ⚠ Pulling more than {selectedSrc.cat.name} has — it will go to {fmt(selectedSrc.available - amountNum)}.
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={close} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "transparent", color: t.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                  <button onClick={submit} disabled={!canSubmit} style={{ flex: 2, padding: "12px 0", borderRadius: 10, border: "none", background: canSubmit ? t.accent : t.cardBorder, color: "#fff", fontSize: 13, fontWeight: 700, cursor: canSubmit ? "pointer" : "not-allowed", opacity: canSubmit ? 1 : 0.5 }}>
+                    Move {amountNum > 0 ? fmt(amountNum) : ""}
+                  </button>
+                </div>
+              </div>
+            </>
+          );
+        })()}
+
         {/* Bottom navigation */}
         {bottomNav}
       </div>
@@ -3797,6 +4706,7 @@ ${context}`;
       savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
       allBankAccounts={d.bankAccounts} setBankAccountsForNode={app.setBankAccountsForNode} addBankAccountToNode={app.addBankAccount} updateBankAccountInNode={app.updateBankAccount} removeBankAccountFromNode={app.removeBankAccount}
       addEntries={app.addEntries} markAllPaid={app.markAllPaid} markAllUnpaid={app.markAllUnpaid}
+      monthFilter={nodePageMonthFilter} onClearMonthFilter={() => setNodePageMonthFilter(null)}
     />
   );
 }
