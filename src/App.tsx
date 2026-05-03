@@ -13,7 +13,7 @@ import { BudgetScreen } from "@/screens/BudgetScreen";
 import { AccountsScreen } from "@/screens/AccountsScreen";
 import { AccountDetailScreen } from "@/screens/AccountDetailScreen";
 import { ScheduledScreen } from "@/screens/ScheduledScreen";
-import { PlaceholderScreen } from "@/screens/PlaceholderScreen";
+import { ReportsScreen } from "@/screens/ReportsScreen";
 
 export function App() {
   const state = useAppState();
@@ -44,10 +44,7 @@ export function App() {
           <Route path="/budget" element={<BudgetScreen />} />
           <Route path="/accounts" element={<AccountsScreen />} />
           <Route path="/accounts/:accountId" element={<AccountDetailScreen />} />
-          <Route
-            path="/reports"
-            element={<PlaceholderScreen title="Reports" />}
-          />
+          <Route path="/reports" element={<ReportsScreen />} />
           <Route path="/settings" element={<SettingsScreen />} />
           <Route path="/scheduled" element={<ScheduledScreen />} />
           <Route path="*" element={<Navigate to="/budget" replace />} />
