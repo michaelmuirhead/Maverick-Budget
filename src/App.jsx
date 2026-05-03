@@ -79,6 +79,23 @@ const PALETTE = ["#6366f1","#3b82f6","#22c55e","#f59e0b","#ef4444","#ec4899","#8
 
 
 const THEMES = {
+  // YNAB-inspired light theme — soft off-white background, deep navy text, lime/red accent pops.
+  linen: {
+    id: "linen", name: "Linen Light",
+    bg: "linear-gradient(180deg, #fafaf9 0%, #f5f5f4 100%)",
+    text: "#1c1917", textSub: "#44403c", textMuted: "#78716c", textDim: "#a8a29e", textDark: "#d6d3d1",
+    accent: "#4f46e5", accentLight: "#6366f1",
+    inc: "#16a34a", exp: "#dc2626",
+    card: "#ffffff",
+    cardBorder: "#e7e5e4", surface: "#f5f5f4", surfaceHover: "#e7e5e4",
+    row: "#ffffff", inputBg: "#ffffff", inputBorder: "#d6d3d1",
+    glow: "radial-gradient(circle, rgba(79,70,229,0.06) 0%, transparent 70%)",
+    titleGrad: "linear-gradient(135deg, #1c1917, #44403c)",
+    selectBg: "#ffffff",
+    font: "'DM Sans', 'Segoe UI', system-ui, sans-serif",
+    mono: "'JetBrains Mono', monospace",
+    fontImport: "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap",
+  },
   midnight: {
     id: "midnight", name: "Midnight Indigo",
     bg: "linear-gradient(160deg, #0a0a1a 0%, #0f1629 40%, #0a0a1a 100%)",
@@ -112,7 +129,7 @@ const THEMES = {
     fontImport: "https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap",
   },
 };
-function T() { return THEMES[window.__THEME__ || "midnight"] || THEMES.midnight; }
+function T() { return THEMES[window.__THEME__ || "linen"] || THEMES.linen; }
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function fmt(n) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n); }
@@ -286,11 +303,14 @@ function describeGoal(goal) {
 // Ready to Assign is derived (all-time income − all-time assignments).
 
 function getCategoryDescendantIds(nodes, nodeId) {
+  // visited-set guard against circular parentId references in legacy data —
+  // an infinite loop here would freeze (and visually blank) the page.
   const out = [nodeId];
+  const seen = new Set([nodeId]);
   const stack = [nodeId];
   while (stack.length) {
     const cur = stack.pop();
-    for (const n of nodes) if (n.parentId === cur) { out.push(n.id); stack.push(n.id); }
+    for (const n of nodes) if (n.parentId === cur && !seen.has(n.id)) { seen.add(n.id); out.push(n.id); stack.push(n.id); }
   }
   return out;
 }
@@ -386,7 +406,17 @@ function useApp(user, householdId) {
   }, [docRef, user]);
 
   const up = fn => setD(p => { const next = fn(p); saveToCloud(next); return next; });
-  const getDesc = useCallback((nodes, nid) => { const kids = nodes.filter(n => n.parentId === nid); let all = kids.map(k => k.id); kids.forEach(k => { all = all.concat(getDesc(nodes, k.id)); }); return all; }, []);
+  // Recursive descendant walk — guarded against circular parentId references in legacy data
+  // (a stack overflow here causes the rendered page to blank).
+  const getDesc = useCallback((nodes, nid, visited) => {
+    const seen = visited || new Set();
+    if (seen.has(nid)) return [];
+    seen.add(nid);
+    const kids = nodes.filter(n => n.parentId === nid);
+    let all = kids.map(k => k.id);
+    kids.forEach(k => { all = all.concat(getDesc(nodes, k.id, seen)); });
+    return all;
+  }, []);
   return {
     d, synced, pendingWrites,
     cats: getCats(d.customCategories),
@@ -519,13 +549,18 @@ function getAllDescendantEntries(nodes, entries, nid) {
 // ── Shared UI ──
 function FolderSvg({ color = "#f59e0b", size = 20 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>); }
 function FolderPlusSvg({ color = "#94a3b8", size = 20 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></svg>); }
-function BottomBar({ children }) { return (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 500, padding: "12px 20px calc(20px + env(safe-area-inset-bottom, 0px))", background: `linear-gradient(to top, ${T().bg.includes("#0a0a1a") ? "#0a0a1a" : "#021a1a"} 60%, transparent)`, display: "flex", gap: 10, zIndex: 10 }}>{children}</div>); }
+function BottomBar({ children }) {
+  // Solid backdrop scrim that adapts to whichever theme is active (light vs the two dark themes)
+  const tt = T();
+  const fade = tt.id === "linen" ? "#fafaf9" : tt.id === "midnight" ? "#0a0a1a" : "#021a1a";
+  return (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 500, padding: "12px 20px calc(20px + env(safe-area-inset-bottom, 0px))", background: `linear-gradient(to top, ${fade} 60%, transparent)`, display: "flex", gap: 10, zIndex: 10 }}>{children}</div>);
+}
 function Btn({ onClick, bg, color, children }) { return (<button onClick={onClick} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, letterSpacing: "0.03em", background: bg, color, transition: "all 0.2s" }}>{children}</button>); }
 function EmptyState({ text, sub }) { return (<div style={{ textAlign: "center", padding: "40px 0", color: "#334155" }}><div style={{ fontSize: 32, marginBottom: 8 }}>◇</div><div style={{ fontSize: 13 }}>{text}</div>{sub && <div style={{ fontSize: 11, marginTop: 4, color: "#1e293b" }}>{sub}</div>}</div>); }
 function AnimNum({ value }) { const [d, sD] = useState(value); const r = useRef(); useEffect(() => { const s = d, e = value; if (s === e) return; const t0 = performance.now(); function tk(n) { const t = Math.min((n - t0) / 400, 1); sD(s + (e - s) * (1 - Math.pow(1 - t, 3))); if (t < 1) r.current = requestAnimationFrame(tk); } r.current = requestAnimationFrame(tk); return () => cancelAnimationFrame(r.current); }, [value]); return (<span>{fmt(d)}</span>); }
-function InlineNew({ placeholder, onCommit, onCancel, accentColor, icon }) { const ref = useRef(null); useEffect(() => { ref.current?.focus(); }, []); const commit = () => { const v = ref.current?.value?.trim(); if (v) onCommit(v); else onCancel(); }; return (<div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: "rgba(255,255,255,0.04)", borderRadius: 12, borderLeft: `4px solid ${accentColor}`, animation: "slideIn 0.2s ease" }}>{icon}<input ref={ref} placeholder={placeholder} onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") onCancel(); }} style={{ flex: 1, background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "6px 2px", color: T().text, fontSize: 15, outline: "none" }} /><button onClick={commit} style={{ background: accentColor, border: "none", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>✓</button></div>); }
+function InlineNew({ placeholder, onCommit, onCancel, accentColor, icon }) { const ref = useRef(null); useEffect(() => { ref.current?.focus(); }, []); const commit = () => { const v = ref.current?.value?.trim(); if (v) onCommit(v); else onCancel(); }; return (<div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: t.surfaceHover, borderRadius: 12, borderLeft: `4px solid ${accentColor}`, animation: "slideIn 0.2s ease" }}>{icon}<input ref={ref} placeholder={placeholder} onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") onCancel(); }} style={{ flex: 1, background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "6px 2px", color: T().text, fontSize: 15, outline: "none" }} /><button onClick={commit} style={{ background: accentColor, border: "none", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>✓</button></div>); }
 function EditableTitle({ value, onSave, style: s }) { const [editing, setEditing] = useState(false); const ref = useRef(null); useEffect(() => { if (editing) ref.current?.focus(); }, [editing]); const commit = () => { const v = ref.current?.value?.trim(); if (v && v !== value) onSave(v); setEditing(false); }; if (editing) return (<input ref={ref} defaultValue={value} onBlur={commit} onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }} style={{ ...s, background: "rgba(255,255,255,0.06)", border: "none", borderBottom: "1px solid rgba(255,255,255,0.2)", borderRadius: 0, padding: "2px 4px", outline: "none", minWidth: 0, width: "100%" }} />); return (<h2 onClick={() => setEditing(true)} title="Tap to rename" style={{ ...s, cursor: "text", borderBottom: "1px dashed rgba(255,255,255,0.15)" }}>{value}</h2>); }
-function SearchBar({ value, onChange }) { return (<div style={{ position: "relative", marginBottom: 12 }}><span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#475569", fontSize: 14 }}>⌕</span><input value={value} onChange={e => onChange(e.target.value)} placeholder="Search transactions..." style={{ width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "8px 10px 8px 30px", color: T().text, fontSize: 13, outline: "none" }} />{value && <button onClick={() => onChange("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 14, padding: 2 }}>×</button>}</div>); }
+function SearchBar({ value, onChange }) { return (<div style={{ position: "relative", marginBottom: 12 }}><span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#475569", fontSize: 14 }}>⌕</span><input value={value} onChange={e => onChange(e.target.value)} placeholder="Search transactions..." style={{ width: "100%", boxSizing: "border-box", background: t.surfaceHover, border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "8px 10px 8px 30px", color: T().text, fontSize: 13, outline: "none" }} />{value && <button onClick={() => onChange("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 14, padding: 2 }}>×</button>}</div>); }
 function ColorPicker({ value, onChange }) { const [open, setOpen] = useState(false); return (<div style={{ position: "relative" }}><button onClick={() => setOpen(!open)} style={{ width: 26, height: 26, borderRadius: 6, background: value, border: "2px solid rgba(255,255,255,0.15)", cursor: "pointer", flexShrink: 0 }} />{open && <div style={{ position: "absolute", top: 32, right: 0, background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: 8, display: "flex", flexWrap: "wrap", gap: 6, width: 140, zIndex: 20, animation: "slideIn 0.15s ease" }}>{PALETTE.map(c => (<button key={c} onClick={() => { onChange(c); setOpen(false); }} style={{ width: 22, height: 22, borderRadius: 5, background: c, border: c === value ? "2px solid #fff" : "2px solid transparent", cursor: "pointer", padding: 0 }} />))}</div>}</div>); }
 function DraggableList({ items, renderItem, onReorder }) {
   const [order, setOrder] = useState(null); // reordered indices during drag
@@ -783,7 +818,7 @@ export default function App({ user, householdId }) {
   const [debtStrategy, setDebtStrategy] = useState("avalanche"); // "avalanche" | "snowball"
   const [whatIfCuts, setWhatIfCuts] = useState({}); // { categoryId: percentReduction }
   const [whatIfMonths, setWhatIfMonths] = useState("12");
-  const [themeId, setThemeId] = useState(() => { try { return localStorage.getItem("maverick-theme") || "midnight"; } catch { return "midnight"; } });
+  const [themeId, setThemeId] = useState(() => { try { return localStorage.getItem("maverick-theme") || "linen"; } catch { return "linen"; } });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => typeof Notification !== "undefined" && Notification.permission === "granted");
   const [notifPrefs, setNotifPrefs] = useState({ ...DEFAULT_NOTIFICATION_PREFS });
   const [notifPrefsLoaded, setNotifPrefsLoaded] = useState(false);
@@ -791,7 +826,14 @@ export default function App({ user, householdId }) {
   const toggleNotifPref = async (key) => { const next = { ...notifPrefs, [key]: !notifPrefs[key] }; setNotifPrefs(next); if (user?.uid) await setNotificationPrefs(user.uid, next); };
   const t = THEMES[themeId] || THEMES.midnight;
   window.__THEME__ = themeId;
-  const toggleTheme = () => { const next = themeId === "midnight" ? "ocean" : "midnight"; setThemeId(next); try { localStorage.setItem("maverick-theme", next); } catch {} window.__THEME__ = next; };
+  const toggleTheme = () => {
+    // Rotate Linen → Midnight → Ocean → Linen
+    const order = ["linen", "midnight", "ocean"];
+    const next = order[(order.indexOf(themeId) + 1) % order.length];
+    setThemeId(next);
+    try { localStorage.setItem("maverick-theme", next); } catch {}
+    window.__THEME__ = next;
+  };
   const cur = navStack.length > 0 ? d.nodes.find(n => n.id === navStack[navStack.length - 1]) : null;
   const par = navStack.length >= 2 ? d.nodes.find(n => n.id === navStack[navStack.length - 2]) : null;
   const goTo = nid => setNavStack([...navStack, nid]);
@@ -1307,7 +1349,7 @@ export default function App({ user, householdId }) {
 
         {/* Assets card */}
         <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden", borderLeft: `3px solid ${t.inc}`, marginBottom: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: t.surface }}>
             <div style={{ fontSize: 12, color: t.inc, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Assets · {fmt(totalAssets)}</div>
             <button onClick={() => { setAddingNwItem("asset"); haptic(); }} style={{ background: `${t.inc}18`, border: "none", color: t.inc, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>+ Add</button>
           </div>
@@ -1317,7 +1359,7 @@ export default function App({ user, householdId }) {
 
         {/* Liabilities card */}
         <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden", borderLeft: `3px solid ${t.exp}`, marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: t.surface }}>
             <div style={{ fontSize: 12, color: t.exp, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Liabilities · {fmt(totalLiabilities)}</div>
             <button onClick={() => { setAddingNwItem("liability"); haptic(); }} style={{ background: `${t.exp}18`, border: "none", color: t.exp, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>+ Add</button>
           </div>
@@ -1720,7 +1762,7 @@ ${context}`;
                 <div style={{ fontSize: 11, lineHeight: 1.5, marginBottom: 14 }}>Your financial strategist with full access to your spending, trends, goals, and net worth.</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                   {["Where am I overspending this month?", "Give me a full financial health check", "What recurring expenses could I cut?", "Help me make a debt payoff plan", "Am I on track with my savings goals?"].map(q => (
-                    <button key={q} onClick={() => { setAdvisorInput(q); }} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "rgba(255,255,255,0.02)", color: t.textSub, fontSize: 11, cursor: "pointer", textAlign: "left" }}>{q}</button>
+                    <button key={q} onClick={() => { setAdvisorInput(q); }} style={{ padding: "9px 12px", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: t.surface, color: t.textSub, fontSize: 11, cursor: "pointer", textAlign: "left" }}>{q}</button>
                   ))}
                 </div>
               </div>
@@ -1870,7 +1912,7 @@ ${context}`;
             {/* Category sliders */}
             {whatIf.catDetails.length > 0 ? (<>
               {whatIf.catDetails.map(cat => (
-                <div key={cat.id} style={{ marginBottom: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10 }}>
+                <div key={cat.id} style={{ marginBottom: 10, padding: "10px 12px", background: t.surface, borderRadius: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span style={{ fontSize: 14 }}>{cat.icon}</span>
@@ -2119,7 +2161,7 @@ ${context}`;
             return (
               <div key={group.id} style={{ background: T().card, border: `1px solid ${T().cardBorder}`, borderRadius: 12, overflow: "hidden", borderLeft: `3px solid ${group.color || T().accent}`, opacity: group.archived ? 0.55 : 1 }}>
                 {/* Group header */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", background: t.surface }}>
                   <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDim, fontSize: 14, padding: "2px 6px", touchAction: "none", userSelect: "none" }}>⠿</div>
                   <ColorPicker value={group.color || T().accent} onChange={c => app.updateNode(group.id, { color: c })} />
                   <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
@@ -2352,7 +2394,7 @@ ${context}`;
     const bottomNav = (
       <div style={{
         position: "sticky", bottom: 0, left: 0, right: 0,
-        background: t.id === "midnight" ? "rgba(8, 8, 22, 0.95)" : "rgba(2, 22, 22, 0.95)",
+        background: t.id === "linen" ? "rgba(255, 255, 255, 0.92)" : t.id === "midnight" ? "rgba(8, 8, 22, 0.95)" : "rgba(2, 22, 22, 0.95)",
         borderTop: `1px solid ${t.cardBorder}`,
         backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
         display: "flex", justifyContent: "space-around", alignItems: "center",
@@ -2463,7 +2505,7 @@ ${context}`;
                 style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none" }} />
             </div>
             {entryDraft.type === "expense" && (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 16, border: `1px solid ${t.cardBorder}` }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: t.surface, borderRadius: 10, marginBottom: 16, border: `1px solid ${t.cardBorder}` }}>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>Paid</div>
                   <div style={{ fontSize: 10, color: t.textMuted }}>{entryDraft.paid ? "Counted in this month's spending" : "Treated as an upcoming bill"}</div>
@@ -2600,7 +2642,7 @@ ${context}`;
                         });
                         setEditingEntry(entry.id);
                         haptic();
-                      }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}>
+                      }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: t.surface, borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}>
                         <div style={{ width: 36, height: 36, borderRadius: 10, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>{cat ? cat.icon : "📋"}</div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || (cat?.label || "Untitled")}</div>
@@ -2955,7 +2997,7 @@ ${context}`;
                 const acct = accountById(entry.accountId);
                 const unpaid = entry.paid === false;
                 return (
-                  <div key={entry.id} onClick={() => openEdit(entry)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}>
+                  <div key={entry.id} onClick={() => openEdit(entry)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: t.surface, borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}>
                     <div style={{ width: 36, height: 36, borderRadius: 10, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>{cat ? cat.icon : "📋"}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || (cat?.label || "Untitled")}</div>
@@ -3099,7 +3141,7 @@ ${context}`;
                         haptic();
                       }
                     }
-                  }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, cursor: "pointer", transition: "background 0.15s" }}
+                  }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: t.surface, borderRadius: 10, cursor: "pointer", transition: "background 0.15s" }}
                     onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
                     onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
                     <div style={{ width: 36, height: 36, borderRadius: 10, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>
@@ -3173,12 +3215,39 @@ ${context}`;
 
           return (
             <>
-              {/* Month picker */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <button onClick={() => { setBudgetMonth(prevKey); haptic(); }} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>‹ {prevLabel}</button>
-                <div style={{ fontSize: 16, fontWeight: 700, color: t.text }}>{monthLabel}</div>
-                <button onClick={() => { setBudgetMonth(nextKey); haptic(); }} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{nextLabel} ›</button>
-              </div>
+              {/* YNAB-style top header — Month picker on left, Ready-to-Assign pill on right (matching the iPad reference layout). */}
+              {(() => {
+                const monthIncome = (d.entries || []).filter(e => e.type === "income" && (e.dateISO || "").startsWith(budgetMonth)).reduce((s, e) => s + (e.amount || 0), 0);
+                const monthAssigned = Object.values(monthMap).reduce((s, c) => s + (c?.assigned || 0), 0);
+                const monthSpent = groups.reduce((sum, group) => {
+                  const cats = d.nodes.filter(n => n.parentId === group.id && !n.archived);
+                  return sum + cats.reduce((s, c) => s + getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth), 0);
+                }, 0);
+                // Lime/green pill when there's money to assign; coral red when over-assigned (YNAB signature).
+                const pillBg = rtaPositive ? "linear-gradient(135deg, #84cc16, #65a30d)" : "linear-gradient(135deg, #fca5a5, #ef4444)";
+                return (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
+                    {/* Month picker — chevron + label, tap month label to jump to today */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <button onClick={() => { setBudgetMonth(prevKey); haptic(); }} title={`← ${prevLabel}`} style={{ background: "transparent", border: "none", color: t.textSub, borderRadius: 999, width: 30, height: 30, cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
+                      <button onClick={() => { const n = new Date(); setBudgetMonth(`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`); haptic(); }} title="Jump to current month" style={{ background: "transparent", border: "none", color: t.text, fontSize: 17, fontWeight: 700, cursor: "pointer", padding: "4px 6px" }}>{monthLabel}</button>
+                      <button onClick={() => { setBudgetMonth(nextKey); haptic(); }} title={`${nextLabel} →`} style={{ background: "transparent", border: "none", color: t.textSub, borderRadius: 999, width: 30, height: 30, cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+                    </div>
+
+                    {/* RTA pill — single touch target, colored by sign */}
+                    <div style={{
+                      background: pillBg, color: rtaPositive ? "#1a2e05" : "#fff",
+                      borderRadius: 999, padding: "8px 14px",
+                      display: "flex", flexDirection: "column", alignItems: "flex-end",
+                      boxShadow: rtaPositive ? "0 4px 14px rgba(132,204,22,0.35)" : "0 4px 14px rgba(239,68,68,0.35)",
+                      minWidth: 120,
+                    }}>
+                      <div style={{ fontSize: 8, opacity: 0.8, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700 }}>Ready to Assign</div>
+                      <div style={{ fontSize: 16, fontWeight: 800, fontFamily: t.mono, lineHeight: 1.15 }}>{rtaPositive ? "" : "-"}{fmt(Math.abs(readyToAssign))}</div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Copy from previous month — only if this month is empty and previous month has assignments */}
               {!hasAnyAssignmentInThisMonth && hasAnyAssignmentInPrevMonth && (
@@ -3187,8 +3256,7 @@ ${context}`;
                 </button>
               )}
 
-              {/* Ready to Assign — YNAB-style bright green pill (or red when overcommitted).
-                  Compact at top so the screen leads with categories, the way YNAB does it. */}
+              {/* Compact this-month context strip (kept for visibility under the header) */}
               {(() => {
                 const monthIncome = (d.entries || []).filter(e => e.type === "income" && (e.dateISO || "").startsWith(budgetMonth)).reduce((s, e) => s + (e.amount || 0), 0);
                 const monthAssigned = Object.values(monthMap).reduce((s, c) => s + (c?.assigned || 0), 0);
@@ -3196,29 +3264,14 @@ ${context}`;
                   const cats = d.nodes.filter(n => n.parentId === group.id && !n.archived);
                   return sum + cats.reduce((s, c) => s + getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth), 0);
                 }, 0);
-                // Brighter, flatter green pill matching YNAB's signature look
-                const pillBg = rtaPositive ? "linear-gradient(135deg, #84cc16, #65a30d)" : "linear-gradient(135deg, #ef4444, #b91c1c)";
+                if (monthIncome === 0 && monthAssigned === 0 && monthSpent === 0) return null;
                 return (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 700 }}>This Month</div>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 10, color: t.textSub, fontFamily: t.mono }}>
-                        <span title="Income"><span style={{ color: t.inc }}>↑</span> {fmt(monthIncome)}</span>
-                        <span title="Assigned">{fmt(monthAssigned)} assigned</span>
-                        <span title="Spent"><span style={{ color: t.exp }}>↓</span> {fmt(monthSpent)}</span>
-                      </div>
-                    </div>
-                    <div style={{
-                      background: pillBg, color: "#fff",
-                      borderRadius: 999, padding: "10px 16px",
-                      display: "flex", alignItems: "center", gap: 10,
-                      boxShadow: rtaPositive ? "0 4px 12px rgba(132,204,22,0.3)" : "0 4px 12px rgba(239,68,68,0.3)",
-                    }}>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                        <div style={{ fontSize: 9, opacity: 0.85, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Ready to Assign</div>
-                        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: t.mono, lineHeight: 1.1 }}>{rtaPositive ? "" : "-"}{fmt(Math.abs(readyToAssign))}</div>
-                      </div>
-                    </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", marginBottom: 12, background: t.surface, borderRadius: 10, fontSize: 10, color: t.textSub, fontFamily: t.mono }}>
+                    <span><span style={{ color: t.inc, fontWeight: 700 }}>↑ {fmt(monthIncome)}</span> income</span>
+                    <span style={{ color: t.textDim }}>·</span>
+                    <span>{fmt(monthAssigned)} assigned</span>
+                    <span style={{ color: t.textDim }}>·</span>
+                    <span><span style={{ color: t.exp, fontWeight: 700 }}>↓ {fmt(monthSpent)}</span> spent</span>
                   </div>
                 );
               })()}
@@ -3254,7 +3307,7 @@ ${context}`;
                       return (
                         <button key={chip.id} onClick={() => { setCategoryFilter(chip.id); haptic(); }} style={{
                           padding: "6px 12px", borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap",
-                          background: sel ? `${tint}25` : "rgba(255,255,255,0.03)",
+                          background: sel ? `${tint}25` : t.surface,
                           border: sel ? `1px solid ${tint}60` : `1px solid ${t.cardBorder}`,
                           color: sel ? tint : t.textSub,
                           fontSize: 11, fontWeight: 700, flexShrink: 0,
@@ -3315,6 +3368,17 @@ ${context}`;
                 );
               })()}
 
+              {/* YNAB-style toolbar above the category list */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px", marginBottom: 8, borderBottom: `1px solid ${t.cardBorder}` }}>
+                <button onClick={() => { setActiveTab("budgets"); setTimeout(() => setAddingRoot(true), 200); haptic(); }} title="Add a category group" style={{ background: "transparent", border: "none", color: t.accent, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, padding: "4px 6px" }}>
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>＋</span> Category Group
+                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, paddingRight: 4 }}>
+                  <span style={{ width: 60, textAlign: "right" }}>Assigned</span>
+                  <span style={{ width: 80, textAlign: "right" }}>Available</span>
+                </div>
+              </div>
+
               {/* Category groups */}
               <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
                 {groups.map(group => {
@@ -3327,9 +3391,10 @@ ${context}`;
 
                   return (
                     <div key={group.id} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
-                      {/* Group header */}
-                      <div onClick={renamingNode === group.id ? undefined : toggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", cursor: renamingNode === group.id ? "default" : "pointer", borderLeft: `3px solid ${group.color || t.accent}`, background: "rgba(255,255,255,0.02)" }}>
+                      {/* Group header — YNAB-style: just chevron + uppercase name, no inline numbers */}
+                      <div onClick={renamingNode === group.id ? undefined : toggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", cursor: renamingNode === group.id ? "default" : "pointer", background: t.surface }}>
                         <span style={{ fontSize: 11, color: t.textMuted, transition: "transform 0.15s", display: "inline-block", transform: collapsed ? "rotate(-90deg)" : "rotate(0)" }}>▾</span>
+                        <div style={{ width: 6, height: 6, borderRadius: 2, background: group.color || t.accent, flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
                           {renamingNode === group.id ? (
                             <input
@@ -3352,10 +3417,13 @@ ${context}`;
                             </>
                           )}
                         </div>
-                        <div style={{ fontSize: 11, color: t.textSub, fontFamily: t.mono, display: "flex", gap: 12 }}>
-                          <span title="Assigned this month">{fmt(groupAssigned)}</span>
-                          <span title="Available" style={{ color: groupAvailable < 0 ? t.exp : t.inc, fontWeight: 600 }}>{fmt(groupAvailable)}</span>
-                        </div>
+                        {/* Subtle group totals — small mono, only when meaningful */}
+                        {(groupAssigned > 0 || groupAvailable !== 0) && (
+                          <div style={{ fontSize: 10, color: t.textMuted, fontFamily: t.mono, display: "flex", gap: 10 }}>
+                            <span style={{ width: 60, textAlign: "right" }}>{fmt(groupAssigned)}</span>
+                            <span style={{ width: 80, textAlign: "right", color: groupAvailable < 0 ? t.exp : t.inc, fontWeight: 700 }}>{fmt(groupAvailable)}</span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Categories — apply the YNAB-style filter chip if active */}
@@ -3395,8 +3463,9 @@ ${context}`;
                             const goalByDay = (goal && goal.type === "target" && goal.by) ? new Date(goal.by + "T00:00:00").getDate() : null;
                             const goalBySuffix = goalByDay ? ` by the ${goalByDay}${["st","nd","rd"][((goalByDay+90)%100-10)%10-1] || "th"}` : "";
 
+                            // YNAB-style underline: amber for overspent, pinkish-red for underfunded (matches the iPad reference)
                             return (
-                              <div key={cat.id} style={{ borderTop: `1px solid ${t.cardBorder}` }}>
+                              <div key={cat.id} style={{ borderTop: `1px solid ${t.cardBorder}`, borderBottom: overspent ? `2px solid #fbbf24` : (goalUnderfunded ? `2px solid ${t.exp}40` : "none") }}>
                                 <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", gap: 10 }}>
                                   {/* Name + tap-to-drill (rename when in rename mode). Drilling from dashboard pre-applies the displayed month as a filter. */}
                                   <div onClick={renamingNode === cat.id ? undefined : () => { setNodePageMonthFilter(budgetMonth); goTo(cat.id); haptic(); }} style={{ flex: 1, minWidth: 0, cursor: renamingNode === cat.id ? "default" : "pointer", display: "flex", alignItems: "center", gap: 8 }}>
@@ -3433,7 +3502,7 @@ ${context}`;
                                           <span style={{ fontSize: 9, color: t.textMuted, fontFamily: t.mono }}>{fmt(activity)} of {fmt(assigned)}</span>
                                         )}
                                         {goal && (
-                                          <button onClick={(ev) => { ev.stopPropagation(); setGoalEditor({ categoryId: cat.id }); setGoalDraft({ type: goal.type, amount: String(goal.amount || ""), by: goal.by || "" }); haptic(); }} style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${t.cardBorder}`, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: t.textSub, cursor: "pointer", fontFamily: t.mono, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                          <button onClick={(ev) => { ev.stopPropagation(); setGoalEditor({ categoryId: cat.id }); setGoalDraft({ type: goal.type, amount: String(goal.amount || ""), by: goal.by || "" }); haptic(); }} style={{ background: t.surfaceHover, border: `1px solid ${t.cardBorder}`, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: t.textSub, cursor: "pointer", fontFamily: t.mono, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
                                             🎯 {goalDesc}
                                           </button>
                                         )}
@@ -3537,7 +3606,7 @@ ${context}`;
 
                                 {/* Progress bar (when assigned > 0) */}
                                 {assigned > 0 && (
-                                  <div style={{ height: 2, background: "rgba(255,255,255,0.04)", marginLeft: 30, marginRight: 14, marginBottom: 8 }}>
+                                  <div style={{ height: 2, background: t.surfaceHover, marginLeft: 30, marginRight: 14, marginBottom: 8 }}>
                                     <div style={{ height: "100%", width: `${pct}%`, background: overspent ? t.exp : pct >= 100 ? t.textMuted : cat.color || t.accent, transition: "width 0.4s ease" }} />
                                   </div>
                                 )}
@@ -3552,11 +3621,7 @@ ${context}`;
                 })}
               </div>
 
-              {/* Column legend (small, fixed reminder) */}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, padding: "0 4px", marginBottom: 14, fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
-                <span style={{ width: 70, textAlign: "right" }}>Assigned</span>
-                <span style={{ width: 80, textAlign: "right" }}>Available</span>
-              </div>
+              {/* (Column legend lives at the top toolbar now) */}
 
               {/* Spending by Category — top categories for the displayed month, sorted descending */}
               {(() => {
@@ -3592,7 +3657,7 @@ ${context}`;
                               </div>
                               <div style={{ fontSize: 11, fontWeight: 600, color: t.text, fontFamily: t.mono, flexShrink: 0 }}>{fmt(r.spent)}</div>
                             </div>
-                            <div style={{ height: 4, background: "rgba(255,255,255,0.04)", borderRadius: 2, overflow: "hidden" }}>
+                            <div style={{ height: 4, background: t.surfaceHover, borderRadius: 2, overflow: "hidden" }}>
                               <div style={{ width: `${pct}%`, height: "100%", background: r.cat.color || t.accent, opacity: 0.8, transition: "width 0.4s ease" }} />
                             </div>
                           </div>
