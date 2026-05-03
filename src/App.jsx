@@ -2871,6 +2871,183 @@ ${context}`;
       );
     }
 
+    // ── Category Detail (rebuilt fresh) ──
+    // Renders when a node is on the navStack. Defensively handles missing/malformed data —
+    // every lookup uses optional chaining, every math call is wrapped in try/catch so a
+    // bad data path produces a graceful fallback instead of blanking the page.
+    if (cur) {
+      const node = cur || {};
+      const nodeId = node.id;
+      const nodeName = (node.name || "Untitled").toString();
+      const nodeColor = node.color || t.accent;
+      const isGroup = node.parentId == null; // null OR undefined → treat as group/root
+      const parentNode = node.parentId ? d.nodes.find(n => n.id === node.parentId) : null;
+      const parentName = parentNode?.name || "Categories";
+
+      // Direct entries on this node only — categories are leaves in the new model,
+      // and walking descendants is what hit the legacy bug.
+      const directEntries = (d.entries || []).filter(e => e && e.nodeId === nodeId);
+      const monthFilter = nodePageMonthFilter;
+      const filteredEntries = monthFilter
+        ? directEntries.filter(e => (e.dateISO || "").startsWith(monthFilter))
+        : directEntries;
+      const sortedEntries = [...filteredEntries].sort((a, b) => (b.dateISO || "").localeCompare(a.dateISO || ""));
+
+      const monthMapForCat = (d.budgetMonths || {})[budgetMonth] || {};
+      const assignedThisMonth = monthMapForCat[nodeId]?.assigned || 0;
+      let activityThisMonth = 0;
+      let availableNow = 0;
+      try { activityThisMonth = getCategoryActivity(d.nodes, d.entries, nodeId, budgetMonth); } catch (err) { console.error("[CategoryDetail] activity math:", err); }
+      try { availableNow = getCategoryAvailable(d.nodes, d.entries, d.budgetMonths || {}, nodeId, budgetMonth); } catch (err) { console.error("[CategoryDetail] available math:", err); }
+      const overspent = availableNow < 0;
+
+      const goal = !isGroup ? (d.goals || {})[nodeId] : null;
+      const goalDesc = describeGoal(goal);
+      const availableThroughLastMonth = availableNow - (assignedThisMonth - activityThisMonth);
+      let goalNeeded = 0;
+      try { goalNeeded = goal ? getGoalNeeded(goal, assignedThisMonth, availableThroughLastMonth, budgetMonth) : 0; } catch {}
+      const goalUnderfunded = goal && goalNeeded > 0;
+
+      const cats = allCats();
+      const monthLabel = (() => {
+        const [y, m] = budgetMonth.split("-");
+        return new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      })();
+      const filterMonthLabel = monthFilter ? (() => {
+        const [y, m] = monthFilter.split("-");
+        return new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      })() : null;
+
+      const openEdit = entry => {
+        if (!entry || !entry.id) return;
+        setEntryDraft({
+          type: entry.type || "expense",
+          categoryId: entry.nodeId || "",
+          accountId: entry.accountId || "",
+          amount: String(Math.abs(entry.amount || 0)),
+          label: entry.label || "",
+          dateISO: entry.dateISO || "",
+          paid: entry.paid !== false,
+        });
+        setEditingEntry(entry.id);
+        haptic();
+      };
+
+      return shell(
+        <div style={{ padding: "20px 20px 0", animation: "fadeIn 0.3s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+            <button onClick={navStack.length === 1 ? goHome : goBack} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 8, padding: "7px 11px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+              ‹ {navStack.length === 1 ? "Budget" : parentName}
+            </button>
+            <div style={{ width: 10, height: 10, borderRadius: "50%", background: nodeColor, flexShrink: 0 }} />
+            <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: t.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nodeName}</h1>
+            <button
+              onClick={() => {
+                const v = prompt("Rename category", nodeName);
+                if (v && v.trim() && v.trim() !== nodeName) app.updateNode(nodeId, { name: v.trim() });
+              }}
+              title="Rename"
+              style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+            >Rename</button>
+          </div>
+
+          {monthFilter && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: `${t.accent}10`, border: `1px solid ${t.accent}30`, borderRadius: 10, marginBottom: 12, fontSize: 11 }}>
+              <span style={{ fontSize: 13 }}>📅</span>
+              <span style={{ flex: 1, color: t.text, fontWeight: 600 }}>{filterMonthLabel}</span>
+              <span style={{ color: t.textMuted, fontFamily: t.mono }}>{sortedEntries.length} txn{sortedEntries.length === 1 ? "" : "s"}</span>
+              <button onClick={() => { setNodePageMonthFilter(null); haptic(); }} title="View all-time" style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+            </div>
+          )}
+
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderLeft: `3px solid ${nodeColor}`, borderRadius: 12, padding: "12px 14px", marginBottom: 12 }}>
+            <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 700, marginBottom: 8 }}>{monthLabel}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Assigned</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: t.text, fontFamily: t.mono, marginTop: 2 }}>{fmt(assignedThisMonth)}</div>
+              </div>
+              <div style={{ flex: 1, borderLeft: `1px solid ${t.cardBorder}`, paddingLeft: 10 }}>
+                <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Activity</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: activityThisMonth > 0 ? t.exp : t.textSub, fontFamily: t.mono, marginTop: 2 }}>{activityThisMonth > 0 ? "-" : ""}{fmt(activityThisMonth)}</div>
+              </div>
+              <div style={{ flex: 1, borderLeft: `1px solid ${t.cardBorder}`, paddingLeft: 10 }}>
+                <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Available</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: overspent ? t.exp : t.inc, fontFamily: t.mono, marginTop: 2 }}>{overspent ? "-" : ""}{fmt(Math.abs(availableNow))}</div>
+              </div>
+            </div>
+          </div>
+
+          {!isGroup && (
+            <div style={{ marginBottom: 12 }}>
+              {goal ? (
+                <button
+                  onClick={() => { setGoalEditor({ categoryId: nodeId }); setGoalDraft({ type: goal.type, amount: String(goal.amount || ""), by: goal.by || "" }); haptic(); }}
+                  style={{ width: "100%", background: goalUnderfunded ? `${t.exp}10` : `${t.inc}10`, border: `1px solid ${goalUnderfunded ? t.exp : t.inc}30`, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", color: goalUnderfunded ? t.exp : t.inc, fontFamily: t.mono, fontSize: 12, fontWeight: 700 }}
+                >
+                  <span>🎯 {goalDesc || "Goal"}</span>
+                  {goalUnderfunded ? <span>+{fmt(goalNeeded)} needed</span> : <span style={{ opacity: 0.7 }}>on track</span>}
+                </button>
+              ) : (
+                <button
+                  onClick={() => { setGoalEditor({ categoryId: nodeId }); setGoalDraft({ type: "monthly", amount: "", by: "" }); haptic(); }}
+                  style={{ width: "100%", background: "transparent", border: `1px dashed ${t.cardBorder}`, borderRadius: 10, padding: "10px 14px", color: t.textMuted, fontSize: 12, fontWeight: 500, cursor: "pointer" }}
+                >+ Set a goal</button>
+              )}
+            </div>
+          )}
+
+          <div style={{ paddingBottom: 100 }}>
+            <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>
+              Transactions ({sortedEntries.length}{monthFilter ? " · this month" : ""})
+            </div>
+            {sortedEntries.length === 0 ? (
+              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "32px 16px", textAlign: "center" }}>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>No transactions {monthFilter ? "this month" : "yet"}</div>
+                <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>Use the + button to add one.</div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {sortedEntries.slice(0, 100).map(entry => {
+                  const cat = cats.find(c => c.id === entry.category);
+                  const acct = (d.accounts || []).find(a => a.id === entry.accountId);
+                  const unpaid = entry.paid === false;
+                  return (
+                    <div
+                      key={entry.id}
+                      onClick={() => openEdit(entry)}
+                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: t.surface, borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}
+                    >
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: cat ? `${cat.color}20` : t.surfaceHover, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>
+                        {cat ? cat.icon : "📋"}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || cat?.label || "Untitled"}</div>
+                        <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {acct ? acct.name : "—"}{entry.dateISO ? ` · ${fmtDate(entry.dateISO)}` : ""}{unpaid ? " · unpaid" : ""}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 700, flexShrink: 0, color: entry.type === "income" ? t.inc : t.exp, fontFamily: t.mono }}>
+                        {entry.type === "income" ? "+" : "-"}{fmt(Math.abs(entry.amount || 0))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {sortedEntries.length > 100 && (
+                  <div style={{ textAlign: "center", fontSize: 10, color: t.textMuted, padding: "8px 0" }}>+{sortedEntries.length - 100} older transactions</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {txEditSheet}
+          <div style={{ flex: 1 }} />
+          {bottomNav}
+        </div>
+      );
+    }
+
     // Tab content: Home (default dashboard)
     return shell(
       <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
