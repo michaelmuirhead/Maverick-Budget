@@ -198,7 +198,7 @@ function parseCSV(text) {
 }
 
 // ── State with Firebase Sync ──
-import { db, auth, signOut, doc, setDoc, onSnapshot, collection, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS, getDisplayPrefs, setDisplayPrefs, DEFAULT_DISPLAY_PREFS, waitForPendingWrites } from "./firebase";
+import { db, auth, signOut, doc, setDoc, onSnapshot, collection, requestNotificationPermission, getNotificationPrefs, setNotificationPrefs, DEFAULT_NOTIFICATION_PREFS, waitForPendingWrites } from "./firebase";
 import NotificationManager from "./NotificationManager";
 import { deleteDoc } from "firebase/firestore";
 
@@ -656,176 +656,8 @@ function ScrollContainer({ children }) {
   );
 }
 
-// ── Monthly Trends (enhanced bar chart for folder view) ──
-function MonthlyTrends({ entries }) {
-  const months = {};
-  entries.forEach(e => {
-    const key = e.dateISO ? e.dateISO.slice(0, 7) : "unknown";
-    if (key === "unknown") return;
-    if (!months[key]) months[key] = { inc: 0, exp: 0 };
-    if (e.type === "income") months[key].inc += e.amount; else months[key].exp += e.amount;
-  });
-  const sorted = Object.entries(months).sort((a, b) => a[0].localeCompare(b[0])).slice(-6);
-  if (sorted.length < 2) return null;
-  const maxVal = Math.max(...sorted.map(([, v]) => Math.max(v.inc, v.exp)), 1);
-  const fmtK = (n) => n >= 1000 ? `$${(n/1000).toFixed(1)}k` : `$${n.toFixed(0)}`;
 
-  return (
-    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
-      <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>Monthly Trends</div>
-      <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: T().inc }} /><span style={{ fontSize: 10, color: T().textMuted }}>Income</span></div>
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: T().exp }} /><span style={{ fontSize: 10, color: T().textMuted }}>Expenses</span></div>
-      </div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 120, padding: "0 4px" }}>
-        {sorted.map(([key, v]) => {
-          const label = new Date(key + "-15").toLocaleDateString("en-US", { month: "short" });
-          const incH = (v.inc / maxVal) * 100;
-          const expH = (v.exp / maxVal) * 100;
-          const net = v.inc - v.exp;
-          return (
-            <div key={key} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-              <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 90, width: "100%" }}>
-                <div style={{ flex: 1, height: `${incH}%`, borderRadius: "4px 4px 0 0", background: `linear-gradient(180deg, ${T().inc}cc, ${T().inc}40)`, position: "relative" }}>
-                  <div style={{ position: "absolute", top: -16, width: "100%", textAlign: "center", fontSize: 8, color: T().textDim, fontFamily: T().mono }}>{fmtK(v.inc)}</div>
-                </div>
-                <div style={{ flex: 1, height: `${expH}%`, borderRadius: "4px 4px 0 0", background: `linear-gradient(180deg, ${T().exp}cc, ${T().exp}40)`, position: "relative" }}>
-                  <div style={{ position: "absolute", top: -16, width: "100%", textAlign: "center", fontSize: 8, color: T().textDim, fontFamily: T().mono }}>{fmtK(v.exp)}</div>
-                </div>
-              </div>
-              <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600 }}>{label}</div>
-              <div style={{ fontSize: 9, fontFamily: T().mono, color: net >= 0 ? T().inc : T().exp, fontWeight: 600 }}>
-                {net >= 0 ? "+" : ""}{fmtK(net)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
-// ── Year in Review (sparkline + summary) ──
-function YearInReview({ entries }) {
-  const year = new Date().getFullYear();
-  const yearEntries = entries.filter(e => e.dateISO && e.dateISO.startsWith(String(year)));
-  if (yearEntries.length < 3) return null;
-
-  // Build monthly data for sparkline
-  const monthMap = {};
-  yearEntries.forEach(e => {
-    const key = e.dateISO.slice(0, 7);
-    if (!monthMap[key]) monthMap[key] = { inc: 0, exp: 0 };
-    if (e.type === "income") monthMap[key].inc += e.amount; else monthMap[key].exp += e.amount;
-  });
-  const sortedMonths = Object.entries(monthMap).sort((a, b) => a[0].localeCompare(b[0]));
-  if (sortedMonths.length < 2) return null;
-
-  let cumulative = 0;
-  const points = sortedMonths.map(([, v]) => { cumulative += (v.inc - v.exp); return cumulative; });
-  const maxP = Math.max(...points, 0);
-  const minP = Math.min(...points, 0);
-  const range = maxP - minP || 1;
-
-  const totalInc = yearEntries.filter(e => e.type === "income").reduce((s, e) => s + e.amount, 0);
-  const totalExp = yearEntries.filter(e => e.type === "expense").reduce((s, e) => s + e.amount, 0);
-  const savingsRate = totalInc > 0 ? ((totalInc - totalExp) / totalInc * 100).toFixed(1) : "0.0";
-  const fmtS = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const w = 280, h = 60, pad = 4;
-  const step = (w - pad * 2) / (points.length - 1 || 1);
-  const pathPoints = points.map((p, i) => `${pad + i * step},${h - pad - ((p - minP) / range) * (h - pad * 2)}`);
-  const linePath = `M ${pathPoints.join(" L ")}`;
-  const areaPath = `${linePath} L ${pad + (points.length - 1) * step},${h - pad} L ${pad},${h - pad} Z`;
-
-  return (
-    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em" }}>{year} in Review</div>
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Net</div>
-            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T().mono, color: cumulative >= 0 ? T().inc : T().exp }}>
-              {cumulative >= 0 ? "+" : ""}{fmtS(cumulative)}
-            </div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase" }}>Savings</div>
-            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T().mono, color: T().accentLight }}>{savingsRate}%</div>
-          </div>
-        </div>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 60 }}>
-        <defs>
-          <linearGradient id="yirAreaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={T().inc} stopOpacity="0.3" />
-            <stop offset="100%" stopColor={T().inc} stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-        {minP < 0 && <line x1={pad} y1={h - pad - ((0 - minP) / range) * (h - pad * 2)} x2={w - pad} y2={h - pad - ((0 - minP) / range) * (h - pad * 2)} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4,4" />}
-        <path d={areaPath} fill="url(#yirAreaGrad)" />
-        <path d={linePath} fill="none" stroke={T().inc} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-        {points.map((p, i) => <circle key={i} cx={pad + i * step} cy={h - pad - ((p - minP) / range) * (h - pad * 2)} r="3.5" fill={T().inc} stroke="#0a0a1a" strokeWidth="1.5" />)}
-      </svg>
-      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 4px 0" }}>
-        {sortedMonths.map(([key], i) => <span key={i} style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{new Date(key + "-15").toLocaleDateString("en-US", { month: "short" })}</span>)}
-      </div>
-    </div>
-  );
-}
-
-// ── Category Breakdown (donut chart) ──
-function CategoryBreakdown({ entries }) {
-  const expEntries = entries.filter(e => e.type === "expense" && e.amount > 0 && e.paid !== false);
-  if (expEntries.length < 2) return null;
-  const catTotals = {};
-  expEntries.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + e.amount; });
-  const cats = allCats();
-  const data = Object.entries(catTotals).map(([id, amount]) => {
-    const cat = cats.find(c => c.id === id) || { id, label: id, icon: "\u{1F4CB}", color: "#f97316" };
-    return { ...cat, amount };
-  }).sort((a, b) => b.amount - a.amount);
-  if (data.length < 2) return null;
-
-  const total = data.reduce((s, d) => s + d.amount, 0);
-  const cx = 60, cy = 60, r = 46, strokeW = 18;
-  const circumference = 2 * Math.PI * r;
-  let cumulativeOffset = 0;
-
-  return (
-    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: `1px solid ${T().cardBorder}`, borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
-      <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>Category Breakdown</div>
-      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-        <div style={{ position: "relative", width: 120, height: 120, flexShrink: 0 }}>
-          <svg viewBox="0 0 120 120" style={{ width: 120, height: 120, transform: "rotate(-90deg)" }}>
-            {data.map((d, i) => {
-              const pct = d.amount / total;
-              const dashLen = pct * circumference;
-              const gap = circumference - dashLen;
-              const offset = cumulativeOffset;
-              cumulativeOffset += dashLen;
-              return <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={d.color} strokeWidth={strokeW} strokeDasharray={`${dashLen} ${gap}`} strokeDashoffset={-offset} />;
-            })}
-          </svg>
-          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center" }}>
-            <div style={{ fontSize: 14, fontWeight: 700, fontFamily: T().mono, color: T().text }}>${total >= 1000 ? (total / 1000).toFixed(1) + "k" : total.toFixed(0)}</div>
-            <div style={{ fontSize: 8, color: T().textDim, textTransform: "uppercase", letterSpacing: "0.1em" }}>total</div>
-          </div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 0 }}>
-          {data.slice(0, 7).map(d => (
-            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 6px", borderRadius: 6 }}>
-              <span style={{ fontSize: 12, width: 16, textAlign: "center" }}>{d.icon}</span>
-              <span style={{ fontSize: 11, color: T().text, fontWeight: 500, flex: 1 }}>{d.label}</span>
-              <span style={{ fontSize: 10, fontFamily: T().mono, color: T().textSub, fontWeight: 600 }}>{fmt(d.amount)}</span>
-              <span style={{ fontSize: 9, fontFamily: T().mono, color: T().textDim, width: 28, textAlign: "right" }}>{((d.amount / total) * 100).toFixed(0)}%</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 
 
@@ -884,656 +716,10 @@ function CategoryManager({ customCategories = [], onAdd, onRemove }) {
   );
 }
 
-// ── Entry Row ──
-function EntryRow({ entry, runningBalance, onUpdate, onRemove, onDuplicate, isEditing, onStartEdit, onStopEdit, onDragHandle, allEntries, bankAccounts, onTogglePaid, selectMode, isSelected, onToggleSelect, onLongPress }) {
-  const cat = allCats().find(c => c.id === entry.category)||{id:"other",label:"Other",icon:"📋",color:"#f97316"}; const isInc = entry.type === "income"; const isPaid = entry.paid !== false;
-  const isTransfer = entry.type === "transfer";
-  const linkedAcct = entry.bankAccountId ? (bankAccounts || []).find(a => a.id === entry.bankAccountId) : null;
-  const lRef = useRef(null), aRef = useRef(null), rRef = useRef(null), dRef = useRef(null);
-  const longPressRef = useRef(null); const longPressTriggered = useRef(false);
-  const [swipeX, setSwipeX] = useState(0); const [swiping, setSwiping] = useState(false); const ts = useRef({ x: 0, y: 0 });
-  const onTS = e => { ts.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; setSwiping(false); longPressTriggered.current = false; if (onLongPress) { longPressRef.current = setTimeout(() => { longPressTriggered.current = true; onLongPress(entry.id); haptic(20); }, 500); } };
-  const onTM = e => { clearTimeout(longPressRef.current); const dx = e.touches[0].clientX - ts.current.x; const dy = e.touches[0].clientY - ts.current.y; if (Math.abs(dx) > 8 || Math.abs(dy) > 8) clearTimeout(longPressRef.current); if (Math.abs(dx) > Math.abs(dy) && dx < 0) { setSwiping(true); setSwipeX(Math.max(dx, -210)); e.preventDefault(); } else if (Math.abs(dx) > Math.abs(dy) && dx > 0 && swipeX < 0) { setSwiping(true); setSwipeX(Math.min(swipeX + dx, 0)); e.preventDefault(); } };
-  const onTE = () => { clearTimeout(longPressRef.current); if (longPressTriggered.current) { longPressTriggered.current = false; return; } if (swipeX < -80) { setSwipeX(-210); } else { setSwipeX(0); } setSwiping(false); };
-  useEffect(() => { if (isEditing) setTimeout(() => { lRef.current?.focus(); rRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, 100); }, [isEditing]);
-
-  const autoCategory = () => {
-    if (isInc || (entry.category && entry.category !== "other")) return;
-    const label = lRef.current?.value?.trim();
-    if (!label) return;
-    const guess = guessCategory(label, allEntries || []);
-    if (guess && guess !== "income" && guess !== "other") {
-      onUpdate(entry.id, { category: guess });
-    }
-  };
-
-  const commit = () => { const label = lRef.current?.value?.trim(), amount = parseFloat(aRef.current?.value), dateISO = dRef.current?.value; if (!label && (!amount || amount === 0)) { onRemove(entry.id); } else { const u = { label: label || "(untitled)", amount: amount || 0 }; if (dateISO) { u.dateISO = dateISO; u.date = fmtDate(dateISO); } autoCategory(); onUpdate(entry.id, u); } haptic(); onStopEdit(); };
-  const kd = e => { if (e.key === "Enter") { if (e.target === lRef.current && aRef.current) aRef.current.focus(); else commit(); } if (e.key === "Escape") { if (!entry.label && entry.amount === 0) onRemove(entry.id); else onStopEdit(); } };
-
-  // Transfer entries are read-only (not editable)
-  if (isTransfer && !isEditing) {
-    const fromAcct = (bankAccounts || []).find(a => a.id === entry.transferFromId);
-    const toAcct = (bankAccounts || []).find(a => a.id === entry.transferToId);
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: `${T().accent}08`, borderRadius: 10, borderLeft: `3px solid ${T().accent}60` }}>
-        <span style={{ fontSize: 16, width: 24, textAlign: "center", flexShrink: 0 }}>↔</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: T().text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "Transfer"}</div>
-          <div style={{ fontSize: 11, color: T().textMuted, marginTop: 1 }}>{fromAcct?.name || "?"} → {toAcct?.name || "?"}{entry.date ? ` · ${entry.date}` : ""}</div>
-        </div>
-        <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: 13, color: T().accent }}>{fmt(entry.amount)}</div>
-        </div>
-        <button onClick={() => { onRemove(entry.id); haptic(15); }} style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 14, padding: "2px 4px" }} onMouseEnter={e => e.currentTarget.style.color = "#ef4444"} onMouseLeave={e => e.currentTarget.style.color = T().textDim}>×</button>
-      </div>
-    );
-  }
-
-  if (isEditing) return (
-    <div ref={rRef} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", background: T().inputBg, borderRadius: 10, animation: "slideIn 0.2s ease" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontSize: 18, width: 28, textAlign: "center", color: isInc ? "#22c55e" : cat.color }}>{isInc ? "↑" : cat.icon}</span>
-        <input ref={lRef} defaultValue={entry.label} placeholder={isInc ? "e.g. Salary" : "e.g. Groceries"} onKeyDown={kd} onBlur={autoCategory} style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "4px 2px", color: T().text, fontSize: 14, outline: "none" }} />
-        <div style={{ position: "relative", width: 90 }}><span style={{ position: "absolute", left: 4, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span><input ref={aRef} defaultValue={entry.amount||""} placeholder="0.00" inputMode="decimal" onKeyDown={kd} style={{ width: "100%", boxSizing: "border-box", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "4px 2px 4px 16px", color: isInc ? T().inc : T().exp, fontSize: 14, fontFamily: T().mono, outline: "none", textAlign: "right" }} /></div>
-        <button onClick={commit} style={{ background: isInc ? "#22c55e" : "#6366f1", border: "none", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", color: isInc ? "#0a0a1a" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>✓</button>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 34, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: T().textMuted }}>Date:</span>
-        <input ref={dRef} type="date" defaultValue={entry.dateISO||""} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", colorScheme: "dark" }} />
-        {!isInc && (<><span style={{ fontSize: 11, color: T().textMuted, marginLeft: 4 }}>Category:</span><select defaultValue={entry.category} onChange={e => onUpdate(entry.id, { category: e.target.value })} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>{allCats().filter(c => c.id !== "income").map(c => (<option key={c.id} value={c.id}>{c.icon} {c.label}</option>))}</select></>)}
-        {bankAccounts && bankAccounts.length > 0 && (
-          <><span style={{ fontSize: 11, color: T().textMuted, marginLeft: 4 }}>Account:</span>
-          <select value={entry.bankAccountId || ""} onChange={e => onUpdate(entry.id, { bankAccountId: e.target.value || null })}
-            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "3px 8px", color: T().text, fontSize: 12, outline: "none", cursor: "pointer", colorScheme: "dark" }}>
-            <option value="">None</option>
-            {bankAccounts.map(a => { const ti = ACCOUNT_TYPES.find(t => t.id === a.type); return <option key={a.id} value={a.id}>{ti?.icon || "🏦"} {a.name}</option>; })}
-          </select></>
-        )}
-      </div>
-    </div>
-  );
-
-  return (
-    <div style={{ position: "relative", overflow: "hidden", borderRadius: 10 }}>
-      {!selectMode && (
-      <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 210, display: "flex", borderRadius: "0 10px 10px 0" }}>
-        <button onClick={() => { if (onTogglePaid) onTogglePaid(entry); else onUpdate(entry.id, { paid: !isPaid }); haptic(); setSwipeX(0); }}
-          style={{ flex: 1, background: isPaid ? "#475569" : "#22c55e", border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
-          {isPaid ? "↩" : "✓"}<span style={{ fontSize: 9 }}>{isPaid ? "Unpay" : "Pay"}</span>
-        </button>
-        <button onClick={() => { onDuplicate(entry); haptic(); setSwipeX(0); }}
-          style={{ flex: 1, background: T().accent, border: "none", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
-          ❐<span style={{ fontSize: 9 }}>Copy</span>
-        </button>
-        <button onClick={() => { onRemove(entry.id); haptic(15); }}
-          style={{ flex: 1, background: "#ef4444", border: "none", borderRadius: "0 10px 10px 0", color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
-          ✕<span style={{ fontSize: 9 }}>Delete</span>
-        </button>
-      </div>
-      )}
-      <div onTouchStart={selectMode ? undefined : onTS} onTouchMove={selectMode ? undefined : onTM} onTouchEnd={selectMode ? undefined : onTE} onContextMenu={e => e.preventDefault()} onClick={() => { if (longPressTriggered.current) return; if (selectMode) { onToggleSelect(entry.id); return; } if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; if (swipeX < 0) { setSwipeX(0); return; } if (!swiping && swipeX === 0) onStartEdit(entry.id); }}
-        style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 10px 10px 6px", background: selectMode && isSelected ? `${T().accent}12` : T().row, outline: selectMode && isSelected ? `1px solid ${T().accent}30` : "none", borderRadius: 10, transition: selectMode ? "background 0.15s, outline 0.15s" : (swiping ? "none" : "transform 0.2s ease"), transform: selectMode ? "none" : `translateX(${swipeX}px)`, cursor: "pointer", position: "relative", zIndex: 1 }}>
-        {selectMode ? (
-          <div style={{ width: 22, height: 22, borderRadius: 6, border: isSelected ? `2px solid ${T().accent}` : "2px solid #475569", background: isSelected ? T().accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, color: "#fff", transition: "all 0.15s" }}>{isSelected ? "✓" : ""}</div>
-        ) : (
-          <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: T().textDark, fontSize: 14, padding: "12px 10px", margin: "-10px -4px -10px -6px", touchAction: "none", userSelect: "none", flexShrink: 0 }}>⠿</div>
-        )}
-        <span style={{ fontSize: 16, width: 24, textAlign: "center", opacity: isPaid ? 0.5 : 0.85, flexShrink: 0 }}>{cat.icon}</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: isInc ? 15 : 14, fontWeight: 500, color: isPaid ? T().textMuted : "#f1f5f9", textDecoration: isPaid ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.label || "(untitled)"}</div>
-          <div style={{ fontSize: 11, color: isPaid ? T().textDim : "#94a3b8", marginTop: 1 }}>
-            {cat.label}{entry.date ? ` · ${entry.date}` : ""}
-            {linkedAcct && <span style={{ marginLeft: 4, fontSize: 10, color: T().textDim }}>· {(ACCOUNT_TYPES.find(t => t.id === linkedAcct.type))?.icon || "🏦"} {linkedAcct.name}</span>}
-          </div>
-        </div>
-        <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ fontFamily: T().mono, fontWeight: 600, fontSize: isInc ? 15 : 14, color: isInc ? T().inc : T().exp, opacity: isPaid ? 0.5 : 1, textDecoration: isPaid ? "line-through" : "none" }}>{isInc ? "+" : "−"}{fmt(Math.abs(entry.amount))}</div>
-          {runningBalance !== undefined && <div style={{ fontFamily: T().mono, fontSize: 10, color: runningBalance >= 0 ? `${T().inc}80` : `${T().exp}80`, marginTop: 1 }}>{fmt(runningBalance)}</div>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Donut ──
-function DonutChart({ entries }) {
-  const expenses = entries.filter(e => e.type === "expense" && e.paid !== false);
-  const byC = allCats().filter(c => c.id !== "income").map(c => ({...c, total: expenses.filter(e => e.category === c.id).reduce((s, e) => s + e.amount, 0)})).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
-  const tot = byC.reduce((s, c) => s + c.total, 0);
-  if (tot === 0) return (<div style={{ textAlign: "center", padding: 20, color: "#475569", fontSize: 13 }}>No expenses yet</div>);
-  const R = 38, CI = 2 * Math.PI * R; let off = 0;
-  const segs = byC.map(c => { const fr = c.total / tot; const sg = {...c, da: `${fr * CI} ${CI}`, doff: -off}; off += fr * CI; return sg; });
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-      <svg width={100} height={100} viewBox="0 0 100 100">
-        {segs.map((s, i) => (<circle key={i} cx={50} cy={50} r={R} fill="none" stroke={s.color} strokeWidth={14} strokeDasharray={s.da} strokeDashoffset={s.doff} transform="rotate(-90 50 50)" />))}
-        <text x="50" y="48" textAnchor="middle" fill="#f8fafc" fontSize="11" fontWeight="700" fontFamily="'JetBrains Mono', monospace">{fmt(tot).replace(".00", "")}</text>
-        <text x="50" y="60" textAnchor="middle" fill="#94a3b8" fontSize="7">spent</text>
-      </svg>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {byC.map(a => (
-          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#cbd5e1" }}>
-            <div style={{ width: 8, height: 8, borderRadius: 2, background: a.color, flexShrink: 0 }} />
-            <span>{a.label}</span>
-            <span style={{ color: "#94a3b8", fontFamily: T().mono }}>{fmt(a.total)}</span>
-            <span style={{ color: "#64748b", fontFamily: T().mono, fontSize: 10 }}>{Math.round((a.total / tot) * 100)}%</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 
-// ── Collapsible Section ──
-function Collapsible({ title, count, defaultOpen, children }) {
-  const [open, setOpen] = useState(defaultOpen ?? false);
-  return (
-    <div>
-      <button onClick={() => setOpen(!open)} style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
-        background: "none", border: "none", cursor: "pointer", padding: "8px 0", marginBottom: open ? 8 : 0,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 11, color: T().textDim, transition: "transform 0.2s", transform: open ? "rotate(90deg)" : "rotate(0deg)", display: "inline-block" }}>▶</span>
-          <span style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>{title}</span>
-          {count !== undefined && <span style={{ fontSize: 10, color: T().textDim, fontFamily: T().mono }}>({count})</span>}
-        </div>
-        <span style={{ fontSize: 10, color: T().textDim }}>{open ? "Hide" : "Show"}</span>
-      </button>
-      {open && <div style={{ animation: "slideIn 0.2s ease" }}>{children}</div>}
-    </div>
-  );
-}
 
-// ── Savings Goals ──
-function SavingsGoals({ goals = [], addGoal, updateGoal, removeGoal }) {
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ name: "", icon: "\u{1F3AF}", target: "" });
-  const [contributingId, setContributingId] = useState(null);
-  const [contributeAmt, setContributeAmt] = useState("");
-  const [editingId, setEditingId] = useState(null);
-  const [editTarget, setEditTarget] = useState("");
 
-  const handleAdd = () => {
-    const name = form.name.trim();
-    const target = parseFloat(form.target);
-    if (!name || !target || target <= 0) return;
-    addGoal({ id: uid(), name, icon: form.icon, target, balance: 0, createdAt: todayISO() });
-    setForm({ name: "", icon: "\u{1F3AF}", target: "" }); setAdding(false); haptic();
-  };
-
-  const handleContribute = (goalId) => {
-    const amt = parseFloat(contributeAmt);
-    if (!amt || amt <= 0) return;
-    const goal = goals.find(g => g.id === goalId);
-    if (!goal) return;
-    updateGoal(goalId, { balance: (goal.balance || 0) + amt });
-    setContributingId(null); setContributeAmt(""); haptic();
-  };
-
-  const handleEditTarget = (goalId) => {
-    const v = parseFloat(editTarget);
-    if (v > 0) updateGoal(goalId, { target: v });
-    setEditingId(null); setEditTarget("");
-  };
-
-  const totalSaved = goals.reduce((s, g) => s + (g.balance || 0), 0);
-  const totalTarget = goals.reduce((s, g) => s + (g.target || 0), 0);
-
-  return (
-    <div style={{
-      background: "linear-gradient(135deg, rgba(6,182,212,0.06), rgba(6,182,212,0.01))",
-      border: "1px solid rgba(6,182,212,0.15)", borderRadius: 16, padding: "14px 16px", marginBottom: 14,
-    }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: goals.length > 0 ? 10 : 0 }}>
-        <div style={{ fontSize: 10, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em" }}>
-          {"🏦"} Savings Goals
-        </div>
-        {goals.length > 0 && (
-          <div style={{ fontSize: 12, fontWeight: 700, fontFamily: T().mono, color: "#06b6d4" }}>
-            {fmt(totalSaved)} <span style={{ fontSize: 9, fontWeight: 500, color: T().textMuted }}>/ {fmt(totalTarget)}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Goal rows */}
-      {goals.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 10 }}>
-          {goals.map(g => {
-            const pct = g.target > 0 ? Math.min((g.balance / g.target) * 100, 100) : 0;
-            const reached = g.balance >= g.target && g.target > 0;
-            return (
-              <div key={g.id}>
-                {editingId === g.id ? (
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", animation: "slideIn 0.15s ease" }}>
-                    <span style={{ fontSize: 14, width: 22, textAlign: "center" }}>{g.icon}</span>
-                    <span style={{ fontSize: 12, color: T().text, fontWeight: 500, minWidth: 50 }}>{g.name}</span>
-                    <div style={{ position: "relative", flex: 1 }}>
-                      <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span>
-                      <input value={editTarget} onChange={e => setEditTarget(e.target.value.replace(/[^0-9.]/g, ""))} autoFocus inputMode="decimal"
-                        onKeyDown={e => { if (e.key === "Enter") handleEditTarget(g.id); if (e.key === "Escape") setEditingId(null); }}
-                        style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 6, padding: "6px 6px 6px 22px", color: T().text, fontSize: 12, fontFamily: T().mono, outline: "none" }} />
-                    </div>
-                    <button onClick={() => handleEditTarget(g.id)} style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: "#06b6d4", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Save</button>
-                    <button onClick={() => setEditingId(null)} style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 11, cursor: "pointer" }}>{"\u2715"}</button>
-                  </div>
-                ) : (
-                  <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
-                        <span style={{ fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 }}>{g.icon}</span>
-                        <span style={{ fontSize: 12, color: T().text, fontWeight: 500 }}>{g.name}</span>
-                        <span style={{ fontSize: 9, color: T().textDim, fontFamily: T().mono }}>{fmt(g.balance || 0)} / {fmt(g.target)}</span>
-                        {reached && <span style={{ fontSize: 8, color: "#fbbf24", fontWeight: 700, background: "rgba(251,191,36,0.12)", padding: "1px 5px", borderRadius: 3 }}>{"\u{1F389}"} Goal reached!</span>}
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
-                        <span style={{ fontSize: 10, fontFamily: T().mono, fontWeight: 600, color: "#06b6d4" }}>{Math.round(pct)}%</span>
-                        <button onClick={() => { setContributingId(contributingId === g.id ? null : g.id); setContributeAmt(""); }} title="Contribute" style={{ background: "none", border: "none", color: contributingId === g.id ? "#06b6d4" : T().textDim, cursor: "pointer", fontSize: 12, padding: "2px 4px", fontWeight: 700 }}>+</button>
-                        <button onClick={() => { setEditingId(g.id); setEditTarget(String(g.target)); }} title="Edit target" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 11, padding: "2px 4px" }}>{"\u270E"}</button>
-                        <button onClick={() => { if (confirm(`Delete "${g.name}"?`)) { removeGoal(g.id); haptic(); } }} title="Delete" style={{ background: "none", border: "none", color: T().textDim, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}
-                          onMouseEnter={e => (e.currentTarget.style.color = T().exp)} onMouseLeave={e => (e.currentTarget.style.color = T().textDim)}>{"\u00D7"}</button>
-                      </div>
-                    </div>
-                    <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: reached ? "#fbbf24" : "#06b6d4", borderRadius: 3, transition: "width 0.4s ease" }} />
-                    </div>
-                    {/* Contribute inline */}
-                    {contributingId === g.id && (
-                      <div style={{ display: "flex", gap: 6, marginTop: 6, animation: "slideIn 0.15s ease" }}>
-                        <div style={{ position: "relative", flex: 1 }}>
-                          <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 12, fontFamily: T().mono }}>$</span>
-                          <input value={contributeAmt} onChange={e => setContributeAmt(e.target.value.replace(/[^0-9.]/g, ""))} autoFocus inputMode="decimal" placeholder="Amount"
-                            onKeyDown={e => { if (e.key === "Enter") handleContribute(g.id); if (e.key === "Escape") setContributingId(null); }}
-                            style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 6, padding: "6px 6px 6px 22px", color: T().text, fontSize: 12, fontFamily: T().mono, outline: "none" }} />
-                        </div>
-                        <button onClick={() => handleContribute(g.id)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "#06b6d4", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Add</button>
-                        <button onClick={() => setContributingId(null)} style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 11, cursor: "pointer" }}>{"\u2715"}</button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Add goal form */}
-      {adding ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, animation: "slideIn 0.15s ease", marginTop: goals.length > 0 ? 4 : 10 }}>
-          <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Goal name (e.g. Emergency Fund)"
-            style={{ background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 13, outline: "none" }} />
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: T().textMuted }}>Icon:</span>
-            <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flex: 1, maxHeight: 80, overflowY: "auto", padding: "2px 0" }}>
-              {["\u{1F3AF}","\u{1F3E6}","\u{1F4B0}","\u{1F3E0}","\u2708\uFE0F","\u{1F697}","\u{1F393}","\u{1F4BB}","\u{1F3E5}","\u{1F476}","\u{1F43E}","\u{1F48D}","\u{1F3D6}\uFE0F","\u{1F6E1}\uFE0F","\u{1F4C8}","\u{1F381}"].map(ic => (
-                <button key={ic} onClick={() => setForm({ ...form, icon: ic })}
-                  style={{ width: 28, height: 28, borderRadius: 6, border: form.icon === ic ? "2px solid #06b6d4" : "1px solid rgba(255,255,255,0.08)", background: form.icon === ic ? "rgba(6,182,212,0.15)" : "rgba(255,255,255,0.03)", cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0 }}>{ic}</button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ position: "relative", flex: 1 }}>
-              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T().textMuted, fontSize: 13, fontFamily: T().mono }}>$</span>
-              <input value={form.target} onChange={e => setForm({ ...form, target: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="Target amount" inputMode="decimal"
-                onKeyDown={e => { if (e.key === "Enter") handleAdd(); }}
-                style={{ width: "100%", boxSizing: "border-box", background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 8px 8px 24px", color: T().text, fontSize: 13, fontFamily: T().mono, outline: "none" }} />
-            </div>
-            <button onClick={handleAdd} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "#06b6d4", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Create</button>
-            <button onClick={() => { setAdding(false); setForm({ name: "", icon: "\u{1F3AF}", target: "" }); }} style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textMuted, fontSize: 12, cursor: "pointer" }}>{"\u2715"}</button>
-          </div>
-        </div>
-      ) : (
-        <button onClick={() => setAdding(true)} style={{
-          display: "block", width: "100%", padding: "8px 0", borderRadius: 8,
-          border: "1px dashed rgba(6,182,212,0.3)", background: "rgba(6,182,212,0.04)",
-          color: "#06b6d4", fontSize: 11, fontWeight: 600, cursor: "pointer",
-          marginTop: goals.length > 0 ? 0 : 10,
-        }}>+ Add Savings Goal</button>
-      )}
-    </div>
-  );
-}
-
-// NODE PAGE
-// ══════════════════════════════════════════════════
-
-function NodePage({ node, parentName, nodes, entries, customCategories, displayPrefs, onBack, onNavigate, addNode, updateNode, removeNode, reorderNodes, addEntry, updateEntry, removeEntry, reorderEntries, addCategory, removeCategory, getDesc, savingsGoals, addSavingsGoal, updateSavingsGoal, removeSavingsGoal, addEntries, markAllPaid, markAllUnpaid, monthFilter, onClearMonthFilter }) {
-  const [addingChild, setAddingChild] = useState(false);
-  const [copyingFrom, setCopyingFrom] = useState(null); // source node id for copy
-  const [editingId, setEditingId] = useState(null);
-  const [search, setSearch] = useState("");
-  const [showArchived, setShowArchived] = useState(false);
-  const [showTxn, setShowTxn] = useState(true);
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [bulkAction, setBulkAction] = useState(null);
-  const [bulkDate, setBulkDate] = useState("");
-  const [quickAddOpen, setQuickAddOpen] = useState(false);
-  const [bottomVisible, setBottomVisible] = useState(false);
-  const fileRef = useRef(null);
-  const bottomBtnsRef = useRef(null);
-
-  useEffect(() => {
-    if (!bottomBtnsRef.current) return;
-    const obs = new IntersectionObserver(([entry]) => setBottomVisible(entry.isIntersecting), { threshold: 0.1 });
-    obs.observe(bottomBtnsRef.current);
-    return () => obs.disconnect();
-  }, []);
-
-  const toggleSelect = (id) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); if (s.size === 0) { setSelectMode(false); setBulkAction(null); } return s; });
-  const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setBulkAction(null); };
-
-  const allChildren = nodes.filter(n => n.parentId === node.id);
-  const children = showArchived ? allChildren : allChildren.filter(c => !c.archived);
-  const archivedCount = allChildren.filter(c => c.archived).length;
-  const directEntries = entries.filter(e => e.nodeId === node.id);
-  const selectedEntries = directEntries.filter(e => selectedIds.has(e.id));
-  const isFolderMode = children.length > 0 || addingChild || allChildren.length > 0;
-  const { inc, exp, balance } = getNodeBalance(nodes, entries, node.id);
-  const color = node.color || "#6366f1";
-  const childStats = children.map(c => ({ ...c, ...getNodeBalance(nodes, entries, c.id), childCount: nodes.filter(n => n.parentId === c.id).length }));
-
-  // Toggle paid (bank-account-linked balance adjustments removed with the bank-accounts feature)
-  const handleTogglePaid = (entry) => {
-    const isPaid = entry.paid !== false;
-    updateEntry(entry.id, { paid: !isPaid });
-  };
-
-  // Copy budget: duplicate entire sub-tree — nodes and all entries (paid reset to false)
-  const handleCopyBudget = (name) => {
-    if (!copyingFrom || !name.trim()) { setCopyingFrom(null); return; }
-    const srcNode = nodes.find(n => n.id === copyingFrom);
-    const rootNewId = uid();
-    addNode({ id: rootNewId, parentId: node.id, name: name.trim(), color: srcNode?.color || PALETTE[children.length % PALETTE.length] });
-
-    // Build an oldId→newId map for the entire sub-tree
-    const idMap = { [copyingFrom]: rootNewId };
-    const descIds = getDesc(nodes, copyingFrom);
-    // Create cloned child nodes with new IDs, preserving parent hierarchy
-    for (const oldId of descIds) {
-      const newChildId = uid();
-      idMap[oldId] = newChildId;
-    }
-    for (const oldId of descIds) {
-      const srcChild = nodes.find(n => n.id === oldId);
-      if (srcChild) addNode({ ...srcChild, id: idMap[oldId], parentId: idMap[srcChild.parentId] || rootNewId });
-    }
-
-    // Copy all entries from source + all descendants, assign new IDs, remap nodeId, reset paid
-    const allSrcIds = [copyingFrom, ...descIds];
-    const srcEntries = entries.filter(e => allSrcIds.includes(e.nodeId));
-    if (srcEntries.length > 0) {
-      const copiedEntries = srcEntries.map(e => ({ ...e, id: uid(), nodeId: idMap[e.nodeId], paid: false }));
-      addEntries(copiedEntries);
-    }
-
-    setCopyingFrom(null);
-    haptic();
-  };
-
-  // All folders use the traditional folder view
-
-  // All descendant entries for folder-level analytics
-  const allDescEntries = getAllDescendantEntries(nodes, entries, node.id);
-
-  let cumulative = 0; const rb = {};
-  directEntries.forEach(e => { cumulative += e.type === "income" ? e.amount : -e.amount; rb[e.id] = cumulative; });
-  const accountFiltered = directEntries;
-  // Optional month filter (set when drilling in from the YNAB dashboard so the user lands on the same month they were viewing)
-  const monthFiltered = monthFilter ? accountFiltered.filter(e => (e.dateISO || "").startsWith(monthFilter)) : accountFiltered;
-  const filtered = search ? monthFiltered.filter(e => e.label.toLowerCase().includes(search.toLowerCase()) || (allCats().find(c => c.id === e.category)?.label||"").toLowerCase().includes(search.toLowerCase())) : monthFiltered;
-
-  const handleAddEntry = (type) => { const eid = uid(); addEntry({ id: eid, nodeId: node.id, label: "", amount: 0, category: type === "income" ? "income" : "other", type, date: "", dateISO: "", paid: false }); setEditingId(eid); setSearch(""); haptic(); };
-  const handleImport = (e) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => { parseCSV(ev.target.result).forEach(p => addEntry({ id: uid(), nodeId: node.id, ...p, dateISO: todayISO(), paid: false })); }; reader.readAsText(file); e.target.value = ""; };
-
-  return (
-    <div style={{ animation: "fadeIn 0.3s ease" }}>
-      <div style={{ padding: "24px 20px 0" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-          <button onClick={onBack} style={{ background: T().inputBg, border: "none", color: T().textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ {parentName}</button>
-          <ColorPicker value={color} onChange={c => updateNode(node.id, { color: c })} />
-          <EditableTitle value={node.name} onSave={v => updateNode(node.id, { name: v })} style={{ fontSize: 17, fontWeight: 700, margin: 0, color: T().text, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} />
-          {(!isFolderMode || allChildren.length > 0) && (
-            <button onClick={() => setAddingChild(true)} title="Add sub-budget" style={{ background: T().inputBg, border: "none", borderRadius: 8, padding: 6, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><FolderPlusSvg color="#94a3b8" size={18} /></button>
-          )}
-        </div>
-
-        {/* Month filter chip — set when drilling in from the dashboard. Tap × to view all-time. */}
-        {monthFilter && (() => {
-          const [y, m] = monthFilter.split("-");
-          const dt = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
-          const label = dt.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-          const count = monthFiltered.length;
-          return (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: `${T().accent}10`, border: `1px solid ${T().accent}30`, borderRadius: 10, marginBottom: 12, fontSize: 11 }}>
-              <span style={{ fontSize: 13 }}>📅</span>
-              <span style={{ flex: 1, color: T().text, fontWeight: 600 }}>{label}</span>
-              <span style={{ color: T().textMuted, fontFamily: T().mono }}>{count} txn{count === 1 ? "" : "s"}</span>
-              <button onClick={() => { onClearMonthFilter && onClearMonthFilter(); haptic(); }} title="View all-time" style={{ background: "none", border: "none", color: T().textMuted, cursor: "pointer", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
-            </div>
-          );
-        })()}
-
-      </div>
-
-      <div style={{ padding: "0 20px 120px" }}>
-        {isFolderMode ? (
-          /* ═══ FOLDER VIEW — lists child budgets to open ═══ */
-          <>
-            {displayPrefs.monthlyTrends && <MonthlyTrends entries={allDescEntries} />}
-            {displayPrefs.yearInReview && <YearInReview entries={allDescEntries} />}
-            {displayPrefs.categoryBreakdown && <CategoryBreakdown entries={allDescEntries} />}
-
-            <SavingsGoals goals={savingsGoals} addGoal={addSavingsGoal} updateGoal={updateSavingsGoal} removeGoal={removeSavingsGoal} />
-
-            <div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Sub-budgets ({children.length})</div>
-            <DraggableList items={childStats} onReorder={ids => reorderNodes(node.id, ids)} renderItem={(c, _i, onDragHandle) => (
-              <div onClick={() => { if (window.__DRAG_ENDED__ && Date.now() - window.__DRAG_ENDED__ < 300) return; onNavigate(c.id); }} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: c.archived ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.02)", borderRadius: 12, borderLeft: `4px solid ${c.color || color}`, cursor: "pointer", transition: "background 0.15s", opacity: c.archived ? 0.5 : 1 }}
-                onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")} onMouseLeave={e => (e.currentTarget.style.background = c.archived ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.02)")}>
-                <div onTouchStart={onDragHandle} style={{ cursor: "grab", color: "#475569", fontSize: 16, padding: "4px 6px", touchAction: "none", userSelect: "none" }}>⠿</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: T().text }}>{c.name}{c.archived && <span style={{ fontSize: 9, color: T().textMuted, marginLeft: 6 }}>archived</span>}</div>
-                  {c.childCount > 0 && <div style={{ fontSize: 11, color: T().textMuted, marginTop: 2 }}>{c.childCount} sub-budget{c.childCount !== 1 ? "s" : ""}</div>}
-                </div>
-                <span style={{ fontSize: 14, fontWeight: 600, fontFamily: T().mono, color: c.balance >= 0 ? "#22c55e" : "#ef4444" }}>{c.balance >= 0 ? "+" : "−"} {fmt(Math.abs(c.balance))}</span>
-                <span style={{ fontSize: 18, color: "#475569" }}>›</span>
-                <button onClick={e => { e.stopPropagation(); setCopyingFrom(c.id); haptic(); }} title="Copy budget" style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} onMouseEnter={e => (e.currentTarget.style.color = T().accentLight)} onMouseLeave={e => (e.currentTarget.style.color = "#475569")}>⧉</button>
-                <button onClick={e => { e.stopPropagation(); updateNode(c.id, { archived: !c.archived }); haptic(); }} title={c.archived ? "Unarchive" : "Archive"} style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>{c.archived ? "↩" : "📦"}</button>
-                <button onClick={e => { e.stopPropagation(); if (confirm(`Delete "${c.name}"?`)) { removeNode(c.id); haptic(15); }}} style={{ background: "none", border: "none", color: "#334155", cursor: "pointer", fontSize: 16, padding: "2px 4px", borderRadius: 4, flexShrink: 0 }} onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")} onMouseLeave={e => (e.currentTarget.style.color = "#334155")}>×</button>
-              </div>
-            )} />
-
-            {/* Copy budget inline form */}
-            {copyingFrom && (
-              <div style={{ marginTop: 8, animation: "slideIn 0.2s ease" }}>
-                <div style={{ fontSize: 11, color: T().textMuted, marginBottom: 6 }}>
-                  Copying from: <strong style={{ color: T().text }}>{nodes.find(n => n.id === copyingFrom)?.name || "Budget"}</strong>
-                  <span style={{ fontSize: 9, color: T().textDim, marginLeft: 6 }}>(all transactions, paid status reset)</span>
-                </div>
-                <InlineNew placeholder="New budget name (e.g. May 2026)" accentColor={color} icon={<div style={{ width: 8 }} />}
-                  onCommit={name => handleCopyBudget(name)} onCancel={() => setCopyingFrom(null)} />
-              </div>
-            )}
-
-            {archivedCount > 0 && !showArchived && (
-              <button onClick={() => setShowArchived(true)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: "#475569", fontSize: 11, cursor: "pointer" }}>Show {archivedCount} archived budget{archivedCount !== 1 ? "s" : ""}</button>
-            )}
-            {showArchived && archivedCount > 0 && (
-              <button onClick={() => setShowArchived(false)} style={{ marginTop: 8, padding: "8px 0", width: "100%", borderRadius: 8, border: "none", background: T().surface, color: "#475569", fontSize: 11, cursor: "pointer" }}>Hide archived</button>
-            )}
-            {addingChild && <div style={{ marginTop: 8 }}><InlineNew placeholder="Sub-budget name" accentColor={color} icon={<div style={{ width: 8 }} />}
-              onCommit={name => {
-                addNode({ id: uid(), parentId: node.id, name, color: PALETTE[children.length % PALETTE.length] });
-                setAddingChild(false); haptic();
-              }} onCancel={() => setAddingChild(false)} /></div>}
-            <BottomBar><Btn onClick={() => setAddingChild(true)} bg={`${color}25`} color={color}>+ New Sub-budget</Btn></BottomBar>
-          </>
-        ) : (
-          <>
-            {/* Budget Summary Card */}
-            {(() => { const tInc = directEntries.filter(e => e.type === "income").reduce((s, e) => s + e.amount, 0); const tExp = directEntries.filter(e => e.type === "expense").reduce((s, e) => s + e.amount, 0); const bal = tInc - tExp; return (
-              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                <div style={{ flex: 1, background: "linear-gradient(135deg, rgba(34,197,94,0.1), rgba(34,197,94,0.03))", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 12, padding: "10px 12px", textAlign: "center" }}>
-                  <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Income</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: T().mono, color: T().inc }}>{fmt(tInc)}</div>
-                </div>
-                <div style={{ flex: 1, background: "linear-gradient(135deg, rgba(239,68,68,0.1), rgba(239,68,68,0.03))", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 12, padding: "10px 12px", textAlign: "center" }}>
-                  <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Expenses</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: T().mono, color: T().exp }}>{fmt(tExp)}</div>
-                </div>
-                <div style={{ flex: 1, background: `linear-gradient(135deg, ${bal >= 0 ? "rgba(34,197,94,0.08), rgba(34,197,94,0.02)" : "rgba(239,68,68,0.08), rgba(239,68,68,0.02)"})`, border: `1px solid ${bal >= 0 ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)"}`, borderRadius: 12, padding: "10px 12px", textAlign: "center" }}>
-                  <div style={{ fontSize: 9, color: T().textMuted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Balance</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: T().mono, color: bal >= 0 ? T().inc : T().exp }}>{bal >= 0 ? "+" : "−"}{fmt(Math.abs(bal))}</div>
-                </div>
-              </div>
-            ); })()}
-            <div style={{ background: T().surface, border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14, padding: 16, marginBottom: 12 }}><DonutChart entries={directEntries} /></div>
-            {directEntries.length > 3 && <SearchBar value={search} onChange={setSearch} />}
-
-            {/* Collapsible Transactions header */}
-            <button onClick={() => { setShowTxn(!showTxn); haptic(5); }} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "none", border: "none", cursor: "pointer", padding: "0 0 10px", marginBottom: 0 }}>
-              <span style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em" }}>Transactions ({filtered.length}{search ? ` of ${directEntries.length}` : ""})</span>
-              <span style={{ fontSize: 14, color: T().textMuted, transition: "transform 0.2s", transform: showTxn ? "rotate(0deg)" : "rotate(-90deg)" }}>▾</span>
-            </button>
-
-            {showTxn && (
-              <>
-                {selectMode && (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0 12px", borderBottom: `0.5px solid rgba(255,255,255,0.08)`, marginBottom: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <button onClick={exitSelectMode} style={{ background: "none", border: "none", color: T().accentLight, fontSize: 13, cursor: "pointer", fontWeight: 500 }}>Cancel</button>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: T().text }}>{selectedIds.size} selected</span>
-                    </div>
-                    <button onClick={() => { if (selectedIds.size === filtered.length) setSelectedIds(new Set()); else setSelectedIds(new Set(filtered.map(e => e.id))); }} style={{ fontSize: 12, color: T().textMuted, background: "rgba(255,255,255,0.05)", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
-                      {selectedIds.size === filtered.length ? "Deselect all" : "Select all"}
-                    </button>
-                  </div>
-                )}
-                {/* Mark All Paid — only shown when unpaid entries exist */}
-                {!selectMode && directEntries.some(e => e.paid === false && e.type !== "transfer") && (
-                  <button onClick={() => {
-                    const unpaid = directEntries.filter(e => e.paid === false && e.type !== "transfer");
-                    if (confirm(`Mark all ${unpaid.length} unpaid transaction(s) as paid?`)) { markAllPaid(node.id); haptic(); }
-                  }}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", padding: "8px 0", marginBottom: 10, borderRadius: 10, border: `1px dashed ${T().inc}50`, background: `${T().inc}10`, color: T().inc, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "background 0.2s, border-color 0.2s" }}
-                    onMouseEnter={e => { e.currentTarget.style.background = `${T().inc}20`; e.currentTarget.style.borderColor = `${T().inc}80`; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = `${T().inc}10`; e.currentTarget.style.borderColor = `${T().inc}50`; }}>
-                    ✓ Mark All as Paid
-                  </button>
-                )}
-                {!selectMode && directEntries.some(e => e.paid !== false) && (
-                  <button onClick={() => {
-                    const paid = directEntries.filter(e => e.paid !== false);
-                    if (confirm(`Mark all ${paid.length} paid transaction(s) as unpaid?`)) { markAllUnpaid(node.id); haptic(); }
-                  }}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", padding: "8px 0", marginBottom: 10, borderRadius: 10, border: `1px dashed ${T().textMuted}50`, background: `${T().textMuted}10`, color: T().textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "background 0.2s, border-color 0.2s" }}
-                    onMouseEnter={e => { e.currentTarget.style.background = `${T().textMuted}20`; e.currentTarget.style.borderColor = `${T().textMuted}80`; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = `${T().textMuted}10`; e.currentTarget.style.borderColor = `${T().textMuted}50`; }}>
-                    ↩ Mark All as Unpaid
-                  </button>
-                )}
-                {filtered.length === 0 ? <EmptyState text={search ? "No matches" : "No entries yet"} sub={search ? "Try a different search or tag" : "Add income or expenses below"} /> : (
-                  <DraggableList items={filtered} onReorder={ids => reorderEntries(node.id, ids)} renderItem={(e, _i, onDragHandle) => (
-                    <EntryRow key={e.id} entry={e} runningBalance={rb[e.id]} onUpdate={updateEntry} onRemove={removeEntry} onDuplicate={src => { const eid = uid(); addEntry({ ...src, id: eid, date: "", dateISO: "", recurring: false, paid: false }); setEditingId(eid); haptic(); }} isEditing={editingId === e.id} onStartEdit={setEditingId} onStopEdit={() => setEditingId(null)} onDragHandle={onDragHandle} allEntries={entries} bankAccounts={[]} onTogglePaid={handleTogglePaid} selectMode={selectMode} isSelected={selectedIds.has(e.id)} onToggleSelect={toggleSelect} onLongPress={(id) => { setSelectMode(true); setSelectedIds(new Set([id])); }} />
-                  )} />
-                )}
-                {selectMode && selectedIds.size > 0 && (
-                  <>
-                    {bulkAction === "date" && (
-                      <div style={{ padding: "12px 0", animation: "slideIn 0.2s ease" }}>
-                        <div style={{ fontSize: 12, color: T().text, fontWeight: 600, marginBottom: 8 }}>Set date for {selectedIds.size} transaction{selectedIds.size !== 1 ? "s" : ""}</div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <input type="date" value={bulkDate} onChange={e => setBulkDate(e.target.value)} style={{ flex: 1, background: T().inputBg, border: `1px solid ${T().inputBorder}`, borderRadius: 8, padding: "8px 10px", color: T().text, fontSize: 13, outline: "none", colorScheme: "dark" }} />
-                          <button onClick={() => { if (bulkDate) { selectedIds.forEach(id => updateEntry(id, { dateISO: bulkDate, date: fmtDate(bulkDate) })); haptic(); exitSelectMode(); } }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: T().accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Apply</button>
-                          <button onClick={() => setBulkAction(null)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${T().cardBorder}`, background: "transparent", color: T().textSub, fontSize: 13, cursor: "pointer" }}>Cancel</button>
-                        </div>
-                      </div>
-                    )}
-                    {!bulkAction && (
-                      <div style={{ display: "flex", gap: 8, padding: "12px 0", background: `linear-gradient(to top, ${T().bg.includes("#0a0a1a") ? "#0a0a1a" : "#021a1a"} 70%, transparent)`, position: "sticky", bottom: 0, zIndex: 5 }}>
-                        <button onClick={() => { setBulkAction("date"); setBulkDate(""); }} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: `${T().accent}20`, color: T().accentLight }}>
-                          <span style={{ fontSize: 16 }}>📅</span>Set date
-                        </button>
-                        <button onClick={() => {
-                          const allPaid = selectedEntries.every(e => e.paid !== false);
-                          const newPaid = !allPaid;
-                          selectedEntries.forEach(e => {
-                            if ((e.paid !== false) !== newPaid) updateEntry(e.id, { paid: newPaid });
-                          });
-                          haptic(); exitSelectMode();
-                        }} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: `${T().inc}18`, color: T().inc }}>
-                          <span style={{ fontSize: 16 }}>✓</span>{selectedEntries.every(e => e.paid !== false) ? "Unpay" : "Pay"}
-                        </button>
-                        <button onClick={() => {
-                          if (confirm(`Delete ${selectedIds.size} transaction${selectedIds.size !== 1 ? "s" : ""}?`)) {
-                            selectedIds.forEach(id => removeEntry(id)); haptic(15); exitSelectMode();
-                          }
-                        }} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>
-                          <span style={{ fontSize: 16 }}>✕</span>Delete
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-            <div ref={bottomBtnsRef} style={{ display: "flex", gap: 10, padding: "16px 0 24px" }}>
-              <Btn onClick={() => handleAddEntry("income")} bg={`${T().inc}25`} color={T().inc}>+ Income</Btn>
-              <Btn onClick={() => handleAddEntry("expense")} bg={`${T().exp}25`} color={T().exp}>+ Expense</Btn>
-            </div>
-            <div><div style={{ fontSize: 12, color: T().textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Import / Export</div><div style={{ display: "flex", gap: 8 }}><button onClick={() => exportCSV(directEntries, node.name)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↓ Export CSV</button><button onClick={() => fileRef.current?.click()} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: T().surface, color: T().textSub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↑ Import CSV</button><input ref={fileRef} type="file" accept=".csv" onChange={handleImport} style={{ display: "none" }} /></div></div>
-          </>
-        )}
-      </div>
-
-      {/* Floating Quick Add button — hides when bottom Income/Expense buttons are visible */}
-      {!bottomVisible && !editingId && (
-        <div style={{ position: "fixed", bottom: "calc(24px + env(safe-area-inset-bottom, 0px))", right: "max(20px, calc(50% - 230px))", zIndex: 200 }}>
-          {quickAddOpen && (
-            <div style={{
-              position: "absolute", bottom: 64, right: 0,
-              display: "flex", flexDirection: "column", gap: 8, minWidth: 150,
-              animation: "fadeIn 0.15s ease",
-            }}>
-              <button onClick={() => { handleAddEntry("income"); setQuickAddOpen(false); haptic(); }} style={{
-                padding: "12px 20px", borderRadius: 12,
-                background: `${T().inc}20`, border: `1px solid ${T().inc}40`,
-                color: T().inc, fontSize: 14, fontWeight: 600, cursor: "pointer",
-                backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
-                display: "flex", alignItems: "center", gap: 8,
-              }}>
-                <span style={{ fontSize: 16 }}>↗</span> Income
-              </button>
-              <button onClick={() => { handleAddEntry("expense"); setQuickAddOpen(false); haptic(); }} style={{
-                padding: "12px 20px", borderRadius: 12,
-                background: `${T().exp}20`, border: `1px solid ${T().exp}40`,
-                color: T().exp, fontSize: 14, fontWeight: 600, cursor: "pointer",
-                backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
-                display: "flex", alignItems: "center", gap: 8,
-              }}>
-                <span style={{ fontSize: 16 }}>↙</span> Expense
-              </button>
-            </div>
-          )}
-          <button onClick={() => { setQuickAddOpen(!quickAddOpen); haptic(); }} style={{
-            width: 52, height: 52, borderRadius: "50%",
-            background: `linear-gradient(135deg, ${T().accent}, ${T().accentLight})`,
-            border: "none", cursor: "pointer",
-            boxShadow: `0 4px 20px ${T().accent}50`,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            transition: "transform 0.2s ease, box-shadow 0.2s ease",
-            transform: quickAddOpen ? "rotate(45deg)" : "rotate(0deg)",
-          }}>
-            <span style={{ fontSize: 26, color: "#fff", lineHeight: 1, fontWeight: 300 }}>+</span>
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ══════════════════════════════════════════════════
 // MAIN APP
@@ -1581,6 +767,9 @@ export default function App({ user, householdId }) {
   // Account editor sheet — null when closed, "new" or accountId
   const [accountEditor, setAccountEditor] = useState(null);
   const [acctDraft, setAcctDraft] = useState({ name: "", type: "checking", startingBalance: "", color: "" });
+  // Transaction editor sheet — null when closed, entryId when editing
+  const [editingEntry, setEditingEntry] = useState(null);
+  const [entryDraft, setEntryDraft] = useState({ type: "expense", categoryId: "", accountId: "", amount: "", label: "", dateISO: "", paid: true });
   const [advisorMessages, setAdvisorMessages] = useState(() => { try { const s = localStorage.getItem("maverick-advisor-msgs"); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [advisorInput, setAdvisorInput] = useState("");
   const [advisorLoading, setAdvisorLoading] = useState(false);
@@ -1598,10 +787,6 @@ export default function App({ user, householdId }) {
   const [notifPrefsLoaded, setNotifPrefsLoaded] = useState(false);
   useEffect(() => { if (user?.uid) { getNotificationPrefs(user.uid).then(p => { setNotifPrefs(p); setNotifPrefsLoaded(true); }); } }, [user?.uid]);
   const toggleNotifPref = async (key) => { const next = { ...notifPrefs, [key]: !notifPrefs[key] }; setNotifPrefs(next); if (user?.uid) await setNotificationPrefs(user.uid, next); };
-  const [displayPrefs, setDisplayPrefsState] = useState({ ...DEFAULT_DISPLAY_PREFS });
-  const [displayPrefsLoaded, setDisplayPrefsLoaded] = useState(false);
-  useEffect(() => { if (user?.uid) { getDisplayPrefs(user.uid).then(p => { setDisplayPrefsState(p); setDisplayPrefsLoaded(true); }); } }, [user?.uid]);
-  const toggleDisplayPref = async (key) => { const next = { ...displayPrefs, [key]: !displayPrefs[key] }; setDisplayPrefsState(next); if (user?.uid) await setDisplayPrefs(user.uid, next); };
   const t = THEMES[themeId] || THEMES.midnight;
   window.__THEME__ = themeId;
   const toggleTheme = () => { const next = themeId === "midnight" ? "ocean" : "midnight"; setThemeId(next); try { localStorage.setItem("maverick-theme", next); } catch {} window.__THEME__ = next; };
@@ -2895,32 +2080,6 @@ ${context}`;
           </div>
         )}
 
-        {/* Display Preferences */}
-        <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4, marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <span style={{ fontSize: 16 }}>📊</span>
-            <div><div style={{ fontSize: 13, color: t.text, fontWeight: 500 }}>Folder Charts</div><div style={{ fontSize: 10, color: t.textMuted }}>Per-user — won't affect your partner</div></div>
-          </div>
-          {displayPrefsLoaded && [
-            { key: "monthlyTrends", label: "Monthly Trends", sub: "Income vs expenses bar chart" },
-            { key: "yearInReview", label: "Year in Review", sub: "Cumulative savings sparkline" },
-            { key: "categoryBreakdown", label: "Category Breakdown", sub: "Expense donut chart" },
-          ].map(({ key, label, sub }) => (
-            <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", marginLeft: 32 }}>
-              <div><div style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{label}</div><div style={{ fontSize: 9, color: t.textMuted }}>{sub}</div></div>
-              <button onClick={() => toggleDisplayPref(key)} style={{
-                width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s",
-                background: displayPrefs[key] ? t.accent : "rgba(255,255,255,0.1)",
-              }}>
-                <div style={{
-                  width: 16, height: 16, borderRadius: 8, background: "#fff", position: "absolute", top: 2, transition: "left 0.2s",
-                  left: displayPrefs[key] ? 18 : 2,
-                }} />
-              </button>
-            </div>
-          ))}
-        </div>
-
         {/* Custom Categories */}
         <div style={{ borderTop: `1px solid ${t.cardBorder}`, paddingTop: 12, marginTop: 4 }}>
           <CategoryManager customCategories={d.customCategories || []} onAdd={app.addCategory} onRemove={app.removeCategory} />
@@ -3222,6 +2381,107 @@ ${context}`;
       </div>
     );
 
+    // Reusable transaction editor sheet — rendered from anywhere that exposes tap-to-edit (Account detail, Category detail).
+    // Driven by the `editingEntry` state set when a row is tapped.
+    const txEditSheet = editingEntry && (() => {
+      const entry = (d.entries || []).find(e => e.id === editingEntry);
+      if (!entry) { setEditingEntry(null); return null; }
+      const close = () => { setEditingEntry(null); };
+      const amtNum = parseFloat(entryDraft.amount) || 0;
+      const accts = (d.accounts || []).filter(a => !a.archived);
+      const valid = amtNum > 0 && entryDraft.categoryId && entryDraft.dateISO && (accts.length === 0 || entryDraft.accountId);
+      const catList = (() => {
+        const out = [];
+        d.nodes.filter(n => n.parentId === null && !n.archived).forEach(g => {
+          d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => out.push({ id: c.id, label: c.name, group: g.name }));
+        });
+        return out;
+      })();
+      const save = () => {
+        if (!valid) return;
+        const dateStr = (() => { const dt = new Date(entryDraft.dateISO + "T00:00:00"); return isNaN(dt) ? entryDraft.dateISO : fmtDate(entryDraft.dateISO); })();
+        app.updateEntry(entry.id, {
+          type: entryDraft.type,
+          nodeId: entryDraft.categoryId,
+          accountId: entryDraft.accountId || null,
+          amount: amtNum,
+          label: entryDraft.label.trim(),
+          dateISO: entryDraft.dateISO,
+          date: dateStr,
+          paid: entryDraft.paid,
+        });
+        haptic(15);
+        close();
+      };
+      const remove = () => { if (confirm("Delete this transaction?")) { app.removeEntry(entry.id); haptic(15); close(); } };
+      return (
+        <>
+          <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, animation: "fadeIn 0.15s ease" }} />
+          <div style={{ position: "fixed", left: "50%", bottom: 0, transform: "translateX(-50%)", width: "100%", maxWidth: 500, maxHeight: "85vh", overflowY: "auto", background: t.bg, borderTop: `1px solid ${t.cardBorder}`, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: "16px 20px calc(20px + env(safe-area-inset-bottom, 0px))", zIndex: 201, animation: "slideIn 0.2s ease", boxShadow: "0 -10px 30px rgba(0,0,0,0.5)" }}>
+            <div style={{ width: 36, height: 4, background: t.cardBorder, borderRadius: 2, margin: "0 auto 12px" }} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: t.text }}>Edit transaction</div>
+              <button onClick={close} style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 22, padding: 4, lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, background: t.surface, padding: 4, borderRadius: 10, border: `1px solid ${t.cardBorder}` }}>
+              {[ { id: "expense", label: "Expense", color: t.exp }, { id: "income", label: "Income", color: t.inc } ].map(opt => {
+                const sel = entryDraft.type === opt.id;
+                return <button key={opt.id} onClick={() => { setEntryDraft({ ...entryDraft, type: opt.id }); haptic(); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", background: sel ? `${opt.color}25` : "transparent", color: sel ? opt.color : t.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{opt.label}</button>;
+              })}
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ position: "relative" }}>
+                <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: t.textMuted, fontSize: 18, fontWeight: 600 }}>$</span>
+                <input autoFocus type="number" inputMode="decimal" step="0.01" min="0" value={entryDraft.amount} onChange={e => setEntryDraft({ ...entryDraft, amount: e.target.value })} placeholder="0.00"
+                  style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "14px 14px 14px 30px", color: t.text, fontSize: 22, fontWeight: 700, fontFamily: t.mono, outline: "none", textAlign: "right" }} />
+              </div>
+            </div>
+            <input value={entryDraft.label} onChange={e => setEntryDraft({ ...entryDraft, label: e.target.value })} placeholder="What for? (optional)"
+              style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none", marginBottom: 12 }} />
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Category</div>
+              <select value={entryDraft.categoryId} onChange={e => setEntryDraft({ ...entryDraft, categoryId: e.target.value })}
+                style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none" }}>
+                {catList.map(c => <option key={c.id} value={c.id}>{c.group} › {c.label}</option>)}
+              </select>
+            </div>
+            {accts.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Account</div>
+                <select value={entryDraft.accountId} onChange={e => setEntryDraft({ ...entryDraft, accountId: e.target.value })}
+                  style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none" }}>
+                  <option value="">None</option>
+                  {accts.map(a => { const ti = ACCOUNT_TYPES.find(at => at.id === a.type) || ACCOUNT_TYPES[0]; return <option key={a.id} value={a.id}>{ti.icon} {a.name}</option>; })}
+                </select>
+              </div>
+            )}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, marginBottom: 6 }}>Date</div>
+              <input type="date" value={entryDraft.dateISO} onChange={e => setEntryDraft({ ...entryDraft, dateISO: e.target.value })}
+                style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.cardBorder}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none" }} />
+            </div>
+            {entryDraft.type === "expense" && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, marginBottom: 16, border: `1px solid ${t.cardBorder}` }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: t.text }}>Paid</div>
+                  <div style={{ fontSize: 10, color: t.textMuted }}>{entryDraft.paid ? "Counted in this month's spending" : "Treated as an upcoming bill"}</div>
+                </div>
+                <button onClick={() => { setEntryDraft({ ...entryDraft, paid: !entryDraft.paid }); haptic(); }}
+                  style={{ width: 44, height: 26, borderRadius: 13, border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s", background: entryDraft.paid ? t.inc : "rgba(255,255,255,0.1)" }}>
+                  <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff", position: "absolute", top: 3, transition: "left 0.2s", left: entryDraft.paid ? 21 : 3 }} />
+                </button>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={remove} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${t.exp}30`, background: `${t.exp}10`, color: t.exp, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Delete</button>
+              <button onClick={close} style={{ flex: 1, padding: "12px 0", borderRadius: 10, border: `1px solid ${t.cardBorder}`, background: "transparent", color: t.textSub, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+              <button onClick={save} disabled={!valid} style={{ flex: 2, padding: "12px 0", borderRadius: 10, border: "none", background: valid ? t.accent : t.cardBorder, color: "#fff", fontSize: 13, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed", opacity: valid ? 1 : 0.5 }}>Save</button>
+            </div>
+          </div>
+        </>
+      );
+    })();
+
     // Tab content: Budgets
     if (activeTab === "budgets") {
       return shell(
@@ -3325,7 +2585,20 @@ ${context}`;
                     const folder = node?.parentId ? d.nodes.find(n => n.id === node.parentId) : node;
                     const unpaid = entry.paid === false;
                     return (
-                      <div key={entry.id} onClick={() => { if (entry.nodeId) { const owner = d.nodes.find(n => n.id === entry.nodeId); if (owner) { const stack = []; let cur = owner; while (cur) { stack.unshift(cur.id); cur = cur.parentId ? d.nodes.find(n => n.id === cur.parentId) : null; } setNavStack(stack); haptic(); } } }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}>
+                      <div key={entry.id} onClick={() => {
+                        // Tap → open the unified transaction editor sheet
+                        setEntryDraft({
+                          type: entry.type || "expense",
+                          categoryId: entry.nodeId || "",
+                          accountId: entry.accountId || "",
+                          amount: String(Math.abs(entry.amount || 0)),
+                          label: entry.label || "",
+                          dateISO: entry.dateISO || "",
+                          paid: entry.paid !== false,
+                        });
+                        setEditingEntry(entry.id);
+                        haptic();
+                      }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}>
                         <div style={{ width: 36, height: 36, borderRadius: 10, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>{cat ? cat.icon : "📋"}</div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || (cat?.label || "Untitled")}</div>
@@ -3343,6 +2616,8 @@ ${context}`;
                 </div>
               )}
             </div>
+
+            {txEditSheet}
 
             <div style={{ flex: 1 }} />
             {bottomNav}
@@ -4585,14 +3860,198 @@ ${context}`;
     );
   }
 
-  return shell(
-    <NodePage node={cur} parentName={par ? par.name : "Home"} nodes={d.nodes} entries={d.entries} customCategories={d.customCategories} displayPrefs={displayPrefs}
-      onBack={navStack.length === 1 ? goHome : goBack} onNavigate={goTo} addNode={app.addNode} updateNode={app.updateNode} removeNode={app.removeNode} reorderNodes={app.reorderNodes}
-      addEntry={app.addEntry} updateEntry={app.updateEntry} removeEntry={app.removeEntry} reorderEntries={app.reorderEntries}
-      addCategory={app.addCategory} removeCategory={app.removeCategory} getDesc={app.getDesc}
-      savingsGoals={d.savingsGoals} addSavingsGoal={app.addSavingsGoal} updateSavingsGoal={app.updateSavingsGoal} removeSavingsGoal={app.removeSavingsGoal}
-      addEntries={app.addEntries} markAllPaid={app.markAllPaid} markAllUnpaid={app.markAllUnpaid}
-      monthFilter={nodePageMonthFilter} onClearMonthFilter={() => setNodePageMonthFilter(null)}
-    />
-  );
+  // ── Category Detail (YNAB-style replacement for the legacy folder NodePage) ──
+  // Renders when something is on the navStack — could be a group, a category, or a deeper sub-budget.
+  // Shows the assigned/activity/available stats for the displayed budget month, the goal (if set),
+  // and a transaction list filtered to entries on this node + all descendants.
+  {
+    const node = cur;
+    const isGroup = node.parentId === null;
+    const parentNode = node.parentId ? d.nodes.find(n => n.id === node.parentId) : null;
+
+    // Aggregate entries from this node + all descendants (so a group shows everything under it)
+    const descIds = new Set([node.id, ...app.getDesc(d.nodes, node.id)]);
+    const ownEntries = (d.entries || []).filter(e => descIds.has(e.nodeId));
+
+    // Apply month filter if set (preserved from the original NodePage UX)
+    const monthFilter = nodePageMonthFilter;
+    const monthFiltered = monthFilter ? ownEntries.filter(e => (e.dateISO || "").startsWith(monthFilter)) : ownEntries;
+    const sortedEntries = [...monthFiltered].sort((a, b) => (b.dateISO || "").localeCompare(a.dateISO || ""));
+
+    // Stats — uses the displayed budget month, not the filter (filter is for the transaction list)
+    const assigned = isGroup
+      ? d.nodes.filter(n => n.parentId === node.id).reduce((s, c) => s + (((d.budgetMonths || {})[budgetMonth] || {})[c.id]?.assigned || 0), 0)
+      : (((d.budgetMonths || {})[budgetMonth] || {})[node.id]?.assigned || 0);
+    const activityThisMonth = getCategoryActivity(d.nodes, d.entries, node.id, budgetMonth);
+    const availableNow = getCategoryAvailable(d.nodes, d.entries, d.budgetMonths || {}, node.id, budgetMonth);
+    const goal = !isGroup ? (d.goals || {})[node.id] : null;
+    const goalDesc = describeGoal(goal);
+    const availableThroughLastMonth = availableNow - (assigned - activityThisMonth);
+    const goalNeeded = goal ? getGoalNeeded(goal, assigned, availableThroughLastMonth, budgetMonth) : 0;
+    const goalUnderfunded = goal && goalNeeded > 0;
+    const overspent = availableNow < 0;
+
+    const cats = allCats();
+    const accountById = id => (d.accounts || []).find(a => a.id === id);
+
+    // Open the transaction editor sheet pre-populated with this entry's data
+    const openEdit = entry => {
+      setEntryDraft({
+        type: entry.type || "expense",
+        categoryId: entry.nodeId || "",
+        accountId: entry.accountId || "",
+        amount: String(Math.abs(entry.amount || 0)),
+        label: entry.label || "",
+        dateISO: entry.dateISO || "",
+        paid: entry.paid !== false,
+      });
+      setEditingEntry(entry.id);
+      haptic();
+    };
+
+    return shell(
+      <div style={{ padding: "24px 20px 0px", animation: "fadeIn 0.4s ease", display: "flex", flexDirection: "column", minHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))", minHeight: "-webkit-fill-available" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          <button onClick={navStack.length === 1 ? goHome : goBack} style={{ background: t.inputBg, border: "none", color: t.textSub, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>‹ {navStack.length === 1 ? "Budget" : par?.name || "Back"}</button>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: node.color || (parentNode?.color) || t.accent, flexShrink: 0 }} />
+          <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: t.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{node.name}</h1>
+          <button onClick={() => { setRenamingNode(node.id); setRenameDraft(node.name); haptic(); }} title="Rename" style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>Rename</button>
+        </div>
+
+        {/* Inline rename row appears here when active */}
+        {renamingNode === node.id && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            <input autoFocus value={renameDraft} onChange={e => setRenameDraft(e.target.value)}
+              onBlur={() => { const v = renameDraft.trim(); if (v && v !== node.name) app.updateNode(node.id, { name: v }); setRenamingNode(null); setRenameDraft(""); }}
+              onKeyDown={e => { if (e.key === "Enter") e.target.blur(); else if (e.key === "Escape") { setRenamingNode(null); setRenameDraft(""); } }}
+              style={{ flex: 1, background: t.inputBg, border: `1px solid ${t.accent}60`, borderRadius: 8, padding: "8px 12px", color: t.text, fontSize: 14, outline: "none" }} />
+          </div>
+        )}
+
+        {/* Month filter chip (set when drilling from dashboard) */}
+        {monthFilter && (() => {
+          const [y, m] = monthFilter.split("-");
+          const dt = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+          const label = dt.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: `${t.accent}10`, border: `1px solid ${t.accent}30`, borderRadius: 10, marginBottom: 12, fontSize: 11 }}>
+              <span style={{ fontSize: 13 }}>📅</span>
+              <span style={{ flex: 1, color: t.text, fontWeight: 600 }}>{label}</span>
+              <span style={{ color: t.textMuted, fontFamily: t.mono }}>{sortedEntries.length} txn{sortedEntries.length === 1 ? "" : "s"}</span>
+              <button onClick={() => { setNodePageMonthFilter(null); haptic(); }} title="View all-time" style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+            </div>
+          );
+        })()}
+
+        {/* Stats card (this budget month) */}
+        <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderLeft: `3px solid ${node.color || t.accent}`, borderRadius: 14, padding: "14px 16px", marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 8 }}>
+            {(() => {
+              const [y, m] = budgetMonth.split("-");
+              const dt = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+              return dt.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+            })()}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Assigned</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: t.text, fontFamily: t.mono, marginTop: 2 }}>{fmt(assigned)}</div>
+            </div>
+            <div style={{ flex: 1, borderLeft: `1px solid ${t.cardBorder}`, paddingLeft: 12 }}>
+              <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Activity</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: t.exp, fontFamily: t.mono, marginTop: 2 }}>{activityThisMonth > 0 ? "-" : ""}{fmt(activityThisMonth)}</div>
+            </div>
+            <div style={{ flex: 1, borderLeft: `1px solid ${t.cardBorder}`, paddingLeft: 12 }}>
+              <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Available</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: overspent ? t.exp : t.inc, fontFamily: t.mono, marginTop: 2 }}>{overspent ? "-" : ""}{fmt(Math.abs(availableNow))}</div>
+            </div>
+          </div>
+          {/* Goal row */}
+          {!isGroup && (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.cardBorder}` }}>
+              {goal ? (
+                <button onClick={() => { setGoalEditor({ categoryId: node.id }); setGoalDraft({ type: goal.type, amount: String(goal.amount || ""), by: goal.by || "" }); haptic(); }} style={{ width: "100%", background: goalUnderfunded ? `${t.exp}10` : `${t.inc}10`, border: `1px solid ${goalUnderfunded ? t.exp : t.inc}30`, borderRadius: 10, padding: "8px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", color: goalUnderfunded ? t.exp : t.inc, fontFamily: t.mono, fontSize: 12, fontWeight: 600 }}>
+                  <span>🎯 {goalDesc}</span>
+                  {goalUnderfunded ? <span>+{fmt(goalNeeded)} needed</span> : <span style={{ opacity: 0.7 }}>on track</span>}
+                </button>
+              ) : (
+                <button onClick={() => { setGoalEditor({ categoryId: node.id }); setGoalDraft({ type: "monthly", amount: "", by: "" }); haptic(); }} style={{ width: "100%", background: "transparent", border: `1px dashed ${t.cardBorder}`, borderRadius: 10, padding: "8px 12px", color: t.textMuted, fontSize: 11, fontWeight: 500, cursor: "pointer" }}>
+                  + Set a goal
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Sub-categories (only for group view) — shown so users can navigate further */}
+        {isGroup && (() => {
+          const subs = d.nodes.filter(n => n.parentId === node.id && !n.archived);
+          if (subs.length === 0) return null;
+          return (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 6, paddingLeft: 2 }}>Categories ({subs.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {subs.map(sub => {
+                  const subAv = getCategoryAvailable(d.nodes, d.entries, d.budgetMonths || {}, sub.id, budgetMonth);
+                  return (
+                    <div key={sub.id} onClick={() => { goTo(sub.id); haptic(); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 10, cursor: "pointer" }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: sub.color || node.color || t.accent, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub.name}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: subAv < 0 ? t.exp : t.inc, fontFamily: t.mono }}>{subAv < 0 ? "-" : ""}{fmt(Math.abs(subAv))}</div>
+                      <span style={{ fontSize: 13, color: t.textDim }}>›</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Transactions list */}
+        <div style={{ paddingBottom: 100 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, paddingLeft: 2 }}>
+            <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600 }}>
+              Transactions ({sortedEntries.length}{monthFilter ? ` · ${(() => { const [y, m] = monthFilter.split("-"); return new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1).toLocaleDateString("en-US", { month: "short" }); })()}` : ""})
+            </div>
+          </div>
+          {sortedEntries.length === 0 ? (
+            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, padding: "32px 16px", textAlign: "center" }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>No transactions {monthFilter ? "this month" : "yet"}</div>
+              <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>Add one with the + button on the dashboard.</div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {sortedEntries.slice(0, 100).map(entry => {
+                const cat = cats.find(c => c.id === entry.category);
+                const acct = accountById(entry.accountId);
+                const unpaid = entry.paid === false;
+                return (
+                  <div key={entry.id} onClick={() => openEdit(entry)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, cursor: "pointer", borderLeft: unpaid ? `2px solid ${t.exp}80` : "2px solid transparent" }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: cat ? `${cat.color}20` : "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>{cat ? cat.icon : "📋"}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || (cat?.label || "Untitled")}</div>
+                      <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {acct ? acct.name : "—"}{entry.dateISO ? ` · ${fmtDate(entry.dateISO)}` : ""}{unpaid ? " · unpaid" : ""}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 600, flexShrink: 0, color: entry.type === "income" ? t.inc : t.exp, fontFamily: t.mono }}>
+                      {entry.type === "income" ? "+" : "-"}{fmt(Math.abs(entry.amount || 0))}
+                    </div>
+                  </div>
+                );
+              })}
+              {sortedEntries.length > 100 && <div style={{ textAlign: "center", fontSize: 10, color: t.textMuted, padding: "8px 0" }}>+{sortedEntries.length - 100} older transactions</div>}
+            </div>
+          )}
+        </div>
+
+        {txEditSheet}
+
+        <div style={{ flex: 1 }} />
+        {bottomNav}
+      </div>
+    );
+  }
 }
