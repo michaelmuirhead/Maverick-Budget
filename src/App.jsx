@@ -741,6 +741,8 @@ export default function App({ user, householdId }) {
   const [globalSearch, setGlobalSearch] = useState("");
   // YNAB-style budget dashboard
   const [budgetMonth, setBudgetMonth] = useState(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
+  // Category filter chip — "all" | "overspent" | "underfunded" | "funded"
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [collapsedGroups, setCollapsedGroups] = useState(() => {
     try { const s = localStorage.getItem("maverick-collapsed-groups"); return s ? new Set(JSON.parse(s)) : new Set(); }
     catch { return new Set(); }
@@ -3185,7 +3187,8 @@ ${context}`;
                 </button>
               )}
 
-              {/* Ready to Assign banner + this-month context */}
+              {/* Ready to Assign — YNAB-style bright green pill (or red when overcommitted).
+                  Compact at top so the screen leads with categories, the way YNAB does it. */}
               {(() => {
                 const monthIncome = (d.entries || []).filter(e => e.type === "income" && (e.dateISO || "").startsWith(budgetMonth)).reduce((s, e) => s + (e.amount || 0), 0);
                 const monthAssigned = Object.values(monthMap).reduce((s, c) => s + (c?.assigned || 0), 0);
@@ -3193,51 +3196,71 @@ ${context}`;
                   const cats = d.nodes.filter(n => n.parentId === group.id && !n.archived);
                   return sum + cats.reduce((s, c) => s + getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth), 0);
                 }, 0);
+                // Brighter, flatter green pill matching YNAB's signature look
+                const pillBg = rtaPositive ? "linear-gradient(135deg, #84cc16, #65a30d)" : "linear-gradient(135deg, #ef4444, #b91c1c)";
                 return (
-                  <div style={{
-                    background: rtaPositive ? `linear-gradient(135deg, ${t.inc}15, ${t.inc}30)` : `linear-gradient(135deg, ${t.exp}20, ${t.exp}35)`,
-                    border: `1px solid ${rtaPositive ? t.inc : t.exp}40`,
-                    borderRadius: 14, padding: "16px 18px", marginBottom: 16,
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 4 }}>Ready to Assign</div>
-                        <div style={{ fontSize: 11, color: rtaPositive ? t.textSub : t.exp }}>{rtaPositive ? "Give every dollar a job" : "You've assigned more than you have"}</div>
-                        {/* Income split — show how much of RTA is fresh this-month vs rolled-over from prior periods.
-                            Only meaningful when RTA is positive (split is undefined for negative RTA). */}
-                        {rtaPositive && readyToAssign > 0 && (() => {
-                          // Cap "this month" at the smaller of (this-month income, RTA) — fresh income that hasn't been "absorbed" by RTA going negative
-                          const fresh = Math.min(monthIncome, readyToAssign);
-                          const rolled = readyToAssign - fresh;
-                          if (monthIncome === 0 || rolled === 0) return null;
-                          return (
-                            <div style={{ fontSize: 9, color: t.textMuted, marginTop: 4, fontFamily: t.mono }}>
-                              <span style={{ color: t.inc }}>{fmt(fresh)} this month</span>
-                              <span style={{ color: t.textDim }}> + </span>
-                              <span style={{ color: t.textSub }}>{fmt(rolled)} rolled over</span>
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      <div style={{ fontSize: 24, fontWeight: 800, color: rtaPositive ? t.inc : t.exp, fontFamily: t.mono, flexShrink: 0 }}>
-                        {rtaPositive ? "" : "-"}{fmt(Math.abs(readyToAssign))}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <div style={{ fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 700 }}>This Month</div>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 10, color: t.textSub, fontFamily: t.mono }}>
+                        <span title="Income"><span style={{ color: t.inc }}>↑</span> {fmt(monthIncome)}</span>
+                        <span title="Assigned">{fmt(monthAssigned)} assigned</span>
+                        <span title="Spent"><span style={{ color: t.exp }}>↓</span> {fmt(monthSpent)}</span>
                       </div>
                     </div>
-                    {/* Month context strip */}
-                    <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: `1px solid ${rtaPositive ? t.inc : t.exp}25`, fontSize: 10 }}>
-                      <div style={{ textAlign: "center", flex: 1 }}>
-                        <div style={{ color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 2 }}>Income</div>
-                        <div style={{ color: t.inc, fontFamily: t.mono, fontWeight: 700, fontSize: 12 }}>{fmt(monthIncome)}</div>
-                      </div>
-                      <div style={{ textAlign: "center", flex: 1, borderLeft: `1px solid ${t.cardBorder}` }}>
-                        <div style={{ color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 2 }}>Assigned</div>
-                        <div style={{ color: t.text, fontFamily: t.mono, fontWeight: 700, fontSize: 12 }}>{fmt(monthAssigned)}</div>
-                      </div>
-                      <div style={{ textAlign: "center", flex: 1, borderLeft: `1px solid ${t.cardBorder}` }}>
-                        <div style={{ color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 2 }}>Spent</div>
-                        <div style={{ color: t.exp, fontFamily: t.mono, fontWeight: 700, fontSize: 12 }}>{fmt(monthSpent)}</div>
+                    <div style={{
+                      background: pillBg, color: "#fff",
+                      borderRadius: 999, padding: "10px 16px",
+                      display: "flex", alignItems: "center", gap: 10,
+                      boxShadow: rtaPositive ? "0 4px 12px rgba(132,204,22,0.3)" : "0 4px 12px rgba(239,68,68,0.3)",
+                    }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                        <div style={{ fontSize: 9, opacity: 0.85, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Ready to Assign</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: t.mono, lineHeight: 1.1 }}>{rtaPositive ? "" : "-"}{fmt(Math.abs(readyToAssign))}</div>
                       </div>
                     </div>
+                  </div>
+                );
+              })()}
+
+              {/* Filter chips — All / Overspent / Underfunded / Funded.
+                  Lets the user narrow the category list to what needs attention. */}
+              {(() => {
+                const goalsObj = d.goals || {};
+                let overspentCount = 0, underfundedCount = 0, fundedCount = 0;
+                groups.forEach(g => {
+                  d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => {
+                    const av = getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, c.id, budgetMonth);
+                    const a = monthMap[c.id]?.assigned || 0;
+                    const act = getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth);
+                    const goal = goalsObj[c.id];
+                    if (av < 0) overspentCount++;
+                    else if (goal && getGoalNeeded(goal, a, av - (a - act), budgetMonth) > 0) underfundedCount++;
+                    else if (a > 0) fundedCount++;
+                  });
+                });
+                const chips = [
+                  { id: "all", label: "All" },
+                  overspentCount > 0 && { id: "overspent", label: `${overspentCount} Overspent`, color: "#eab308" },
+                  underfundedCount > 0 && { id: "underfunded", label: `${underfundedCount} Underfunded`, color: t.exp },
+                  fundedCount > 0 && { id: "funded", label: "Funded", color: t.inc },
+                ].filter(Boolean);
+                if (chips.length <= 1) return null;
+                return (
+                  <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", padding: "2px 2px 4px", margin: "0 -2px 14px" }}>
+                    {chips.map(chip => {
+                      const sel = categoryFilter === chip.id;
+                      const tint = chip.color || t.accent;
+                      return (
+                        <button key={chip.id} onClick={() => { setCategoryFilter(chip.id); haptic(); }} style={{
+                          padding: "6px 12px", borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap",
+                          background: sel ? `${tint}25` : "rgba(255,255,255,0.03)",
+                          border: sel ? `1px solid ${tint}60` : `1px solid ${t.cardBorder}`,
+                          color: sel ? tint : t.textSub,
+                          fontSize: 11, fontWeight: 700, flexShrink: 0,
+                        }}>{chip.label}</button>
+                      );
+                    })}
                   </div>
                 );
               })()}
@@ -3335,12 +3358,26 @@ ${context}`;
                         </div>
                       </div>
 
-                      {/* Categories */}
-                      {!collapsed && (
+                      {/* Categories — apply the YNAB-style filter chip if active */}
+                      {!collapsed && (() => {
+                        const filtered = categories.filter(cat => {
+                          if (categoryFilter === "all") return true;
+                          const a = monthMap[cat.id]?.assigned || 0;
+                          const act = getCategoryActivity(d.nodes, d.entries, cat.id, budgetMonth);
+                          const av = getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, cat.id, budgetMonth);
+                          const goal = (d.goals || {})[cat.id];
+                          if (categoryFilter === "overspent") return av < 0;
+                          if (categoryFilter === "underfunded") return av >= 0 && goal && getGoalNeeded(goal, a, av - (a - act), budgetMonth) > 0;
+                          if (categoryFilter === "funded") return av >= 0 && a > 0 && (!goal || getGoalNeeded(goal, a, av - (a - act), budgetMonth) <= 0);
+                          return true;
+                        });
+                        return (
                         <div>
-                          {categories.length === 0 ? (
-                            <div style={{ padding: "12px 14px", fontSize: 11, color: t.textMuted, textAlign: "center" }}>No categories yet — add one in Budgets.</div>
-                          ) : categories.map(cat => {
+                          {filtered.length === 0 && categories.length > 0 ? (
+                            <div style={{ padding: "12px 14px", fontSize: 11, color: t.textMuted, textAlign: "center" }}>No categories match the selected filter.</div>
+                          ) : filtered.length === 0 ? (
+                            <div style={{ padding: "12px 14px", fontSize: 11, color: t.textMuted, textAlign: "center" }}>No categories yet — add one in Categories.</div>
+                          ) : filtered.map(cat => {
                             const assigned = monthMap[cat.id]?.assigned || 0;
                             const activity = getCategoryActivity(d.nodes, d.entries, cat.id, budgetMonth);
                             const available = getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, cat.id, budgetMonth);
@@ -3354,6 +3391,9 @@ ${context}`;
                             const availableThroughLastMonth = available - (assigned - activity);
                             const goalNeeded = goal ? getGoalNeeded(goal, assigned, availableThroughLastMonth, budgetMonth) : 0;
                             const goalUnderfunded = goal && goalNeeded > 0;
+                            // Pretty "by Xth" suffix for target goals; null for monthly or no goal
+                            const goalByDay = (goal && goal.type === "target" && goal.by) ? new Date(goal.by + "T00:00:00").getDate() : null;
+                            const goalBySuffix = goalByDay ? ` by the ${goalByDay}${["st","nd","rd"][((goalByDay+90)%100-10)%10-1] || "th"}` : "";
 
                             return (
                               <div key={cat.id} style={{ borderTop: `1px solid ${t.cardBorder}` }}>
@@ -3381,15 +3421,20 @@ ${context}`;
                                           <button onClick={e => { e.stopPropagation(); setRenamingNode(cat.id); setRenameDraft(cat.name); haptic(); }} title="Rename" style={{ background: "none", border: "none", color: t.textMuted, cursor: "pointer", fontSize: 11, padding: "0 2px", opacity: 0.4, flexShrink: 0 }} onMouseEnter={e => e.currentTarget.style.opacity = "1"} onMouseLeave={e => e.currentTarget.style.opacity = "0.4"}>✎</button>
                                         </div>
                                       )}
-                                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
-                                        {(activity > 0 || assigned > 0) && (
-                                          <span style={{ fontSize: 9, color: t.textMuted, fontFamily: t.mono }}>
-                                            {fmt(activity)} of {fmt(assigned)}
-                                          </span>
+                                      {/* YNAB-style sub-info: overspent warning OR goal-needed text OR activity/assigned context */}
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
+                                        {overspent && (
+                                          <span style={{ fontSize: 10, color: t.exp, fontWeight: 600 }}>Overspent: {fmt(Math.abs(available))}</span>
+                                        )}
+                                        {!overspent && goalUnderfunded && (
+                                          <span style={{ fontSize: 10, color: t.exp, fontWeight: 600 }}>{fmt(goalNeeded)} more needed{goalBySuffix}</span>
+                                        )}
+                                        {!overspent && !goalUnderfunded && (activity > 0 || assigned > 0) && (
+                                          <span style={{ fontSize: 9, color: t.textMuted, fontFamily: t.mono }}>{fmt(activity)} of {fmt(assigned)}</span>
                                         )}
                                         {goal && (
-                                          <button onClick={(ev) => { ev.stopPropagation(); setGoalEditor({ categoryId: cat.id }); setGoalDraft({ type: goal.type, amount: String(goal.amount || ""), by: goal.by || "" }); haptic(); }} style={{ background: goalUnderfunded ? `${t.exp}15` : `${t.inc}12`, border: `1px solid ${goalUnderfunded ? t.exp : t.inc}30`, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: goalUnderfunded ? t.exp : t.inc, cursor: "pointer", fontFamily: t.mono, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
-                                            🎯 {goalDesc}{goalUnderfunded ? ` · +${fmt(goalNeeded).replace("$", "$")}` : ""}
+                                          <button onClick={(ev) => { ev.stopPropagation(); setGoalEditor({ categoryId: cat.id }); setGoalDraft({ type: goal.type, amount: String(goal.amount || ""), by: goal.by || "" }); haptic(); }} style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${t.cardBorder}`, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: t.textSub, cursor: "pointer", fontFamily: t.mono, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                            🎯 {goalDesc}
                                           </button>
                                         )}
                                         {!goal && (
@@ -3425,30 +3470,38 @@ ${context}`;
                                     )}
                                   </div>
 
-                                  {/* Available — tap to move money. When overspent, auto-suggest the highest-available eligible source. */}
-                                  <button onClick={() => {
-                                    setMoveMoney({ dstId: cat.id });
-                                    setMoveAmount(overspent ? String(Math.abs(available).toFixed(2)) : "");
-                                    if (overspent) {
-                                      // Find best suggested source: highest available balance among other categories
-                                      const allCats = [];
-                                      groups.forEach(g => { d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => allCats.push(c)); });
-                                      const candidates = allCats
-                                        .filter(c => c.id !== cat.id)
-                                        .map(c => ({ id: c.id, av: getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, c.id, budgetMonth) }))
-                                        .filter(s => s.av > 0)
-                                        .sort((a, b) => b.av - a.av);
-                                      setMoveSourceId(candidates.length > 0 ? candidates[0].id : "");
-                                    } else {
-                                      setMoveSourceId("");
-                                    }
-                                    haptic();
-                                  }} style={{ width: 80, textAlign: "right", background: overspent ? `${t.exp}10` : "transparent", border: overspent ? `1px solid ${t.exp}30` : "1px solid transparent", borderRadius: 6, padding: "3px 6px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                                    <div style={{ fontSize: 13, fontWeight: 700, color: overspent ? t.exp : fullyFunded ? t.textMuted : t.inc, fontFamily: t.mono }}>
-                                      {overspent ? "-" : ""}{fmt(Math.abs(available))}
-                                    </div>
-                                    {overspent && <div style={{ fontSize: 8, color: t.exp, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 1 }}>Cover ›</div>}
-                                  </button>
+                                  {/* Available — YNAB-style colored pill. Yellow = overspent, green = positive, neutral = zero. Tap to move money (auto-suggests source when overspent). */}
+                                  {(() => {
+                                    // YNAB color rules: overspent → yellow pill (with red text), funded > $0 → green pill, $0 → neutral
+                                    const isZero = Math.abs(available) < 0.005;
+                                    const pillBg = overspent ? "#fef3c7" : (isZero ? "rgba(255,255,255,0.04)" : "#dcfce7");
+                                    const pillBorder = overspent ? "#fbbf24" : (isZero ? t.cardBorder : "#86efac");
+                                    const pillText = overspent ? "#b45309" : (isZero ? t.textSub : "#15803d");
+                                    return (
+                                      <button onClick={() => {
+                                        setMoveMoney({ dstId: cat.id });
+                                        setMoveAmount(overspent ? String(Math.abs(available).toFixed(2)) : "");
+                                        if (overspent) {
+                                          const allCats = [];
+                                          groups.forEach(g => { d.nodes.filter(n => n.parentId === g.id && !n.archived).forEach(c => allCats.push(c)); });
+                                          const candidates = allCats
+                                            .filter(c => c.id !== cat.id)
+                                            .map(c => ({ id: c.id, av: getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, c.id, budgetMonth) }))
+                                            .filter(s => s.av > 0)
+                                            .sort((a, b) => b.av - a.av);
+                                          setMoveSourceId(candidates.length > 0 ? candidates[0].id : "");
+                                        } else {
+                                          setMoveSourceId("");
+                                        }
+                                        haptic();
+                                      }} style={{ width: 88, background: pillBg, border: `1px solid ${pillBorder}`, borderRadius: 999, padding: "5px 10px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
+                                        {overspent && <span style={{ fontSize: 10, lineHeight: 1, color: pillText }}>⚠</span>}
+                                        <div style={{ fontSize: 12, fontWeight: 700, color: pillText, fontFamily: t.mono, lineHeight: 1.2 }}>
+                                          {overspent ? "" : isZero ? "" : ""}{fmt(Math.abs(available))}
+                                        </div>
+                                      </button>
+                                    );
+                                  })()}
                                 </div>
 
                                 {/* Quick-assign presets — only while editing this row's assigned input */}
@@ -3492,7 +3545,8 @@ ${context}`;
                             );
                           })}
                         </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   );
                 })}
