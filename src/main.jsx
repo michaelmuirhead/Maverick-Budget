@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+import App, { ErrorBoundary } from './App';
 import Auth from './Auth';
 import HouseholdSetup from './HouseholdSetup';
 import { auth, db, onAuthStateChanged, doc, getDoc } from './firebase';
@@ -65,8 +65,12 @@ function Root() {
   // No household yet — show setup
   if (householdId === null) return <HouseholdSetup user={user} onReady={(id) => setHouseholdId(id)} />;
 
-  // All good — show app
-  return <App user={user} householdId={householdId} />;
+  // All good — show app, wrapped in an ErrorBoundary so render errors surface as a readable page (not blank).
+  return (
+    <ErrorBoundary>
+      <App user={user} householdId={householdId} />
+    </ErrorBoundary>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
