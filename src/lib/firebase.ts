@@ -6,6 +6,7 @@ import {
   persistentMultipleTabManager,
   type Firestore,
 } from "firebase/firestore";
+import { getFunctions, type Functions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: "AIzaSyD_VgKQLA6tLLYDd4wRU5PR4c9DxEdQdUk",
@@ -19,6 +20,8 @@ const firebaseConfig = {
 export const app: FirebaseApp = initializeApp(firebaseConfig);
 export const auth: Auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+// Cloud Functions live in us-central1 (see functions/src/index.ts setGlobalOptions).
+export const functions: Functions = getFunctions(app, "us-central1");
 
 // IndexedDB-backed Firestore cache. Writes queue while offline and replay on
 // reconnect; multi-tab manager keeps the cache coherent across browser tabs
