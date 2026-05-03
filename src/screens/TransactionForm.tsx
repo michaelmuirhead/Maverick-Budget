@@ -1,18 +1,30 @@
 import { useState, type FormEvent } from "react";
 import { useSession } from "@/lib/session";
-import { useCategories, useCategoryGroups } from "@/hooks/useHouseholdData";
+import {
+  useAccounts,
+  useCategories,
+  useCategoryGroups,
+} from "@/hooks/useHouseholdData";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import {
   createTransaction,
+  createTransfer,
   deleteTransaction,
+  setTransactionStatus,
   updateTransaction,
+  updateTransfer,
 } from "@/lib/transactions";
 import { parseCents } from "@/lib/money";
 import { todayISO } from "@/lib/dates";
-import type { TransactionDoc, TransactionStatus } from "@/types/schema";
+import type {
+  AccountDoc,
+  TransactionDoc,
+  TransactionStatus,
+} from "@/types/schema";
 
 interface Props {
+  /** The account this form is anchored to (the source side, for transfers). */
   accountId: string;
   accountName: string;
   /** When set, the form runs in edit mode (with a Delete button). */
@@ -20,15 +32,22 @@ interface Props {
   onDone: () => void;
 }
 
-type Direction = "outflow" | "inflow";
+type Direction = "outflow" | "inflow" | "transfer";
 
 export function TransactionForm({ accountId, accountName, existing, onDone }: Props) {
   const { user, household } = useSession();
+  const accounts = useAccounts();
   const groups = useCategoryGroups();
   const categories = useCategories();
 
-  const initialDirection: Direction =
-    existing && existing.amountCents > 0 ? "inflow" : "outflow";
+  const initialDirection: Direction = existing
+    ? existing.transferTransactionId
+      ? "transfer"
+      : existing.amountCents > 0
+        ? "inflow"
+        : "outflow"
+    : "outflow";
+
   const initialAmount = existing
     ? Math.abs(existing.amountCents / 100).toFixed(2)
     : "";
@@ -36,7 +55,9 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
   const [direction, setDirection] = useState<Direction>(initialDirection);
   const [amountInput, setAmountInput] = useState(initialAmount);
   const [date, setDate] = useState(existing?.date ?? todayISO());
-  const [payeeName, setPayeeName] = useState(existing?.payeeName ?? "");
+  const [payeeName, setPayeeName] = useState(
+    existing && !existing.transferTransactionId ? (existing.payeeName ?? "") : "",
+  );
   const [categoryId, setCategoryId] = useState<string | null>(
     existing?.categoryId ?? null,
   );
@@ -44,10 +65,21 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
   const [status, setStatus] = useState<TransactionStatus>(
     existing?.status ?? "uncleared",
   );
+  // For transfers, the OTHER account. Defaults to the first non-source open account.
+  const [destAccountId, setDestAccountId] = useState<string>(() => {
+    if (existing?.transferAccountId) return existing.transferAccountId;
+    const firstOther = accounts.data.find((a) => a.id !== accountId && !a.closed);
+    return firstOther?.id ?? "";
+  });
+
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // Direction is locked in edit mode — switching modes mid-edit gets weird
+  // (would require deleting one shape and creating another). Hide the segments.
+  const editMode = existing !== undefined;
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -58,32 +90,67 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
     }
     setError(null);
     setSubmitting(true);
-    const signed = direction === "outflow" ? -magnitude : magnitude;
-    const effectiveCategory = direction === "inflow" ? null : categoryId;
     try {
-      if (existing) {
-        await updateTransaction({
-          householdId: household.id,
-          transactionId: existing.id,
-          date,
-          amountCents: signed,
-          categoryId: effectiveCategory,
-          payeeName,
-          memo,
-          status,
-        });
+      if (direction === "transfer") {
+        if (!destAccountId || destAccountId === accountId) {
+          throw new Error("Pick a different destination account.");
+        }
+        const destAcc = accounts.data.find((a) => a.id === destAccountId);
+        if (!destAcc) throw new Error("Destination account not found.");
+        if (existing) {
+          // Update both sides of the transfer (date, amount, memo). Status is
+          // handled separately below for the side the user is editing.
+          await updateTransfer({
+            householdId: household.id,
+            transactionId: existing.id,
+            date,
+            amountCents: magnitude,
+            memo,
+          });
+          if (status !== existing.status) {
+            await setTransactionStatus(household.id, existing.id, status);
+          }
+        } else {
+          await createTransfer({
+            householdId: household.id,
+            createdByUid: user.uid,
+            fromAccountId: accountId,
+            fromAccountName: accountName,
+            toAccountId: destAcc.id,
+            toAccountName: destAcc.name,
+            date,
+            amountCents: magnitude,
+            memo,
+            status,
+          });
+        }
       } else {
-        await createTransaction({
-          householdId: household.id,
-          createdByUid: user.uid,
-          accountId,
-          date,
-          amountCents: signed,
-          categoryId: effectiveCategory,
-          payeeName,
-          memo,
-          status,
-        });
+        const signed = direction === "outflow" ? -magnitude : magnitude;
+        const effectiveCategory = direction === "inflow" ? null : categoryId;
+        if (existing) {
+          await updateTransaction({
+            householdId: household.id,
+            transactionId: existing.id,
+            date,
+            amountCents: signed,
+            categoryId: effectiveCategory,
+            payeeName,
+            memo,
+            status,
+          });
+        } else {
+          await createTransaction({
+            householdId: household.id,
+            createdByUid: user.uid,
+            accountId,
+            date,
+            amountCents: signed,
+            categoryId: effectiveCategory,
+            payeeName,
+            memo,
+            status,
+          });
+        }
       }
       onDone();
     } catch (err) {
@@ -106,31 +173,42 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
     }
   }
 
-  const groupedCats = groups.data.map((g) => ({
-    group: g,
-    cats: categories.data.filter((c) => c.groupId === g.id && !c.hidden),
-  }));
+  const groupedCats = groups.data
+    .filter((g) => !g.hidden)
+    .map((g) => ({
+      group: g,
+      cats: categories.data.filter((c) => c.groupId === g.id && !c.hidden),
+    }));
+
+  const otherAccounts = accounts.data.filter((a) => a.id !== accountId && !a.closed);
 
   const busy = submitting || deleting;
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2">
-        <SegmentedButton
-          active={direction === "outflow"}
-          onClick={() => setDirection("outflow")}
-          disabled={busy}
-        >
-          Outflow
-        </SegmentedButton>
-        <SegmentedButton
-          active={direction === "inflow"}
-          onClick={() => setDirection("inflow")}
-          disabled={busy}
-        >
-          Inflow
-        </SegmentedButton>
-      </div>
+      {!editMode ? (
+        <div className="grid grid-cols-3 gap-2">
+          <SegmentedButton active={direction === "outflow"} onClick={() => setDirection("outflow")}>
+            Outflow
+          </SegmentedButton>
+          <SegmentedButton active={direction === "inflow"} onClick={() => setDirection("inflow")}>
+            Inflow
+          </SegmentedButton>
+          <SegmentedButton
+            active={direction === "transfer"}
+            onClick={() => setDirection("transfer")}
+            disabled={otherAccounts.length === 0}
+          >
+            Transfer
+          </SegmentedButton>
+        </div>
+      ) : (
+        <div className="text-xs text-white/40">
+          {direction === "outflow" && "Outflow"}
+          {direction === "inflow" && "Inflow"}
+          {direction === "transfer" && "Transfer"}
+        </div>
+      )}
 
       <Input
         label="Amount"
@@ -138,7 +216,7 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
         onChange={(e) => setAmountInput(e.target.value)}
         placeholder="0.00"
         inputMode="decimal"
-        autoFocus={!existing}
+        autoFocus={!editMode}
       />
 
       <Input
@@ -148,12 +226,22 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
         onChange={(e) => setDate(e.target.value)}
       />
 
-      <Input
-        label="Payee"
-        value={payeeName}
-        onChange={(e) => setPayeeName(e.target.value)}
-        placeholder={direction === "inflow" ? "e.g. Acme Payroll" : "e.g. Trader Joe's"}
-      />
+      {direction === "transfer" ? (
+        <DestAccountPicker
+          accounts={otherAccounts}
+          accountId={destAccountId}
+          onChange={setDestAccountId}
+          fromName={accountName}
+          editMode={editMode}
+        />
+      ) : (
+        <Input
+          label="Payee"
+          value={payeeName}
+          onChange={(e) => setPayeeName(e.target.value)}
+          placeholder={direction === "inflow" ? "e.g. Acme Payroll" : "e.g. Trader Joe's"}
+        />
+      )}
 
       {direction === "outflow" ? (
         <CategoryPicker
@@ -161,9 +249,13 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
           onChange={setCategoryId}
           grouped={groupedCats}
         />
-      ) : (
+      ) : direction === "inflow" ? (
         <div className="rounded-xl bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300 ring-1 ring-emerald-500/20">
           Inflow goes to <strong>Ready to Assign</strong> on the Budget tab.
+        </div>
+      ) : (
+        <div className="rounded-xl bg-blue-500/10 px-3 py-2 text-xs text-blue-300 ring-1 ring-blue-500/20">
+          Transfers move money between accounts and don't affect Ready to Assign.
         </div>
       )}
 
@@ -200,7 +292,9 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
           {confirmingDelete ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-white/60">
-                Delete this transaction? It can't be undone.
+                {direction === "transfer"
+                  ? "Delete this transfer? Both sides will be removed."
+                  : "Delete this transaction? It can't be undone."}
               </p>
               <div className="flex gap-2">
                 <Button
@@ -239,6 +333,8 @@ export function TransactionForm({ accountId, accountName, existing, onDone }: Pr
   );
 }
 
+// ── Sub-components ──────────────────────────────────────────────────────────
+
 function SegmentedButton({
   active,
   onClick,
@@ -260,7 +356,7 @@ function SegmentedButton({
         active
           ? "bg-brand-500/15 text-white ring-brand-500/60"
           : "bg-white/5 text-white/70 ring-white/10 hover:bg-white/10",
-        disabled ? "opacity-60" : "",
+        disabled ? "opacity-40 cursor-not-allowed" : "",
       ].join(" ")}
     >
       {children}
@@ -306,6 +402,52 @@ function CategoryPicker({
           ) : null,
         )}
       </select>
+    </div>
+  );
+}
+
+function DestAccountPicker({
+  accounts,
+  accountId,
+  onChange,
+  fromName,
+  editMode,
+}: {
+  accounts: AccountDoc[];
+  accountId: string;
+  onChange: (id: string) => void;
+  fromName: string;
+  editMode: boolean;
+}) {
+  if (accounts.length === 0) {
+    return (
+      <div className="rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-200 ring-1 ring-amber-500/20">
+        Create another account before transferring.
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-medium text-white/70">
+        Transfer from {fromName} to
+      </label>
+      <select
+        value={accountId}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={editMode}
+        className="min-h-[44px] rounded-xl bg-white/5 px-4 py-3 text-base text-white ring-1 ring-inset ring-white/10 focus:outline-none focus:ring-2 focus:ring-brand-400/60 disabled:opacity-60"
+      >
+        {accounts.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+      {editMode ? (
+        <p className="text-[11px] text-white/40">
+          To change the destination, delete this transfer and create a new one.
+        </p>
+      ) : null}
     </div>
   );
 }

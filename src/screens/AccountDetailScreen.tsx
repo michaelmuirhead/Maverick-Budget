@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Sheet } from "@/components/ui/Sheet";
 import { TransactionForm } from "./TransactionForm";
+import { EditAccountForm } from "./EditAccountForm";
 import { computeAccountBalance } from "@/lib/budget";
 import { formatCents, formatCentsSigned } from "@/lib/money";
 import { formatHumanDate } from "@/lib/dates";
@@ -22,6 +23,7 @@ export function AccountDetailScreen() {
   const txns = useAccountTransactions(accountId ?? null);
   const [adding, setAdding] = useState(false);
   const [editingTxn, setEditingTxn] = useState<TransactionDoc | null>(null);
+  const [editingAccount, setEditingAccount] = useState(false);
 
   const account = accounts.data.find((a) => a.id === accountId);
 
@@ -52,16 +54,33 @@ export function AccountDetailScreen() {
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-6 px-4 pt-12">
       <header className="safe-top flex flex-col gap-2">
-        <Link
-          to="/accounts"
-          className="text-xs uppercase tracking-wide text-white/40 hover:text-white/70"
-        >
-          ← Accounts
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link
+            to="/accounts"
+            className="text-xs uppercase tracking-wide text-white/40 hover:text-white/70"
+          >
+            ← Accounts
+          </Link>
+          {account ? (
+            <button
+              type="button"
+              onClick={() => setEditingAccount(true)}
+              aria-label="Edit account"
+              className="rounded-full p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="5" cy="12" r="1.5" />
+                <circle cx="12" cy="12" r="1.5" />
+                <circle cx="19" cy="12" r="1.5" />
+              </svg>
+            </button>
+          ) : null}
+        </div>
         <div className="flex items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{account?.name ?? "…"}</h1>
             <p className="mt-1 text-sm text-white/60">
+              {account?.closed ? <span className="text-amber-300">Closed · </span> : null}
               Cleared {formatCents(balance.clearedCents, household.currency)}
             </p>
           </div>
@@ -129,6 +148,19 @@ export function AccountDetailScreen() {
             accountName={account.name}
             existing={editingTxn}
             onDone={() => setEditingTxn(null)}
+          />
+        ) : null}
+      </Sheet>
+
+      <Sheet
+        open={editingAccount}
+        onClose={() => setEditingAccount(false)}
+        title="Edit account"
+      >
+        {account ? (
+          <EditAccountForm
+            account={account}
+            onDone={() => setEditingAccount(false)}
           />
         ) : null}
       </Sheet>

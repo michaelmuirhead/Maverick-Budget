@@ -25,9 +25,12 @@ export function AccountsScreen() {
 
   const onBudget = accounts.data.filter((a) => a.onBudget && !a.closed);
   const offBudget = accounts.data.filter((a) => !a.onBudget && !a.closed);
+  const closedAccounts = accounts.data.filter((a) => a.closed);
 
   const totalOnBudget = sumBalances(onBudget, balancesByAccountId);
   const totalOffBudget = sumBalances(offBudget, balancesByAccountId);
+
+  const [showClosed, setShowClosed] = useState(false);
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-6 px-4 pt-12">
@@ -67,6 +70,28 @@ export function AccountsScreen() {
           balances={balancesByAccountId}
           currency={household.currency}
         />
+      ) : null}
+
+      {closedAccounts.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setShowClosed((v) => !v)}
+            className="self-start rounded-xl bg-white/5 px-3 py-2 text-xs text-white/60 ring-1 ring-white/10 hover:bg-white/10"
+          >
+            {showClosed ? "Hide" : "Show"} {closedAccounts.length} closed account
+            {closedAccounts.length === 1 ? "" : "s"}
+          </button>
+          {showClosed ? (
+            <Section
+              title="Closed accounts"
+              total=""
+              accounts={closedAccounts}
+              balances={balancesByAccountId}
+              currency={household.currency}
+            />
+          ) : null}
+        </div>
       ) : null}
 
       <Sheet open={creating} onClose={() => setCreating(false)} title="Add account">

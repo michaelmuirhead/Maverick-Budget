@@ -19,6 +19,8 @@ import { addMonths, currentMonth, formatMonth, monthOf } from "@/lib/dates";
 import { formatCents, parseCents } from "@/lib/money";
 import { createCategory, createCategoryGroup } from "@/lib/categories";
 import { Input } from "@/components/ui/Input";
+import { EditGroupForm } from "./EditGroupForm";
+import { EditCategoryForm } from "./EditCategoryForm";
 import type {
   CategoryDoc,
   CategoryGroupDoc,
@@ -67,9 +69,16 @@ export function BudgetScreen() {
   }, [categories.data]);
 
   const [editing, setEditing] = useState<CategoryDoc | null>(null);
+  const [editingCategory, setEditingCategory] = useState<CategoryDoc | null>(null);
+  const [editingGroup, setEditingGroup] = useState<CategoryGroupDoc | null>(null);
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [creatingCategoryInGroup, setCreatingCategoryInGroup] =
     useState<CategoryGroupDoc | null>(null);
+
+  const visibleGroups = useMemo(
+    () => groups.data.filter((g) => !g.hidden),
+    [groups.data],
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-5 px-4 pt-12 pb-4">
@@ -84,11 +93,11 @@ export function BudgetScreen() {
 
       <ReadyToAssignCard cents={ready} currency={household.currency} />
 
-      {groups.data.length === 0 ? (
+      {visibleGroups.length === 0 ? (
         <EmptyCategories onAddGroup={() => setCreatingGroup(true)} />
       ) : (
         <div className="flex flex-col gap-4">
-          {groups.data.map((g) => (
+          {visibleGroups.map((g) => (
             <GroupSection
               key={g.id}
               group={g}
@@ -100,6 +109,8 @@ export function BudgetScreen() {
               currency={household.currency}
               onBudgetIds={onBudgetIds}
               onPickCategory={setEditing}
+              onEditCategory={setEditingCategory}
+              onEditGroup={setEditingGroup}
               onAddCategory={() => setCreatingCategoryInGroup(g)}
             />
           ))}
@@ -145,6 +156,32 @@ export function BudgetScreen() {
           <CreateCategoryForm
             group={creatingCategoryInGroup}
             onDone={() => setCreatingCategoryInGroup(null)}
+          />
+        ) : null}
+      </Sheet>
+
+      <Sheet
+        open={editingGroup !== null}
+        onClose={() => setEditingGroup(null)}
+        title={`Edit ${editingGroup?.name ?? ""}`}
+      >
+        {editingGroup ? (
+          <EditGroupForm
+            group={editingGroup}
+            onDone={() => setEditingGroup(null)}
+          />
+        ) : null}
+      </Sheet>
+
+      <Sheet
+        open={editingCategory !== null}
+        onClose={() => setEditingCategory(null)}
+        title={`Edit ${editingCategory?.name ?? ""}`}
+      >
+        {editingCategory ? (
+          <EditCategoryForm
+            category={editingCategory}
+            onDone={() => setEditingCategory(null)}
           />
         ) : null}
       </Sheet>
@@ -246,6 +283,8 @@ function GroupSection({
   currency,
   onBudgetIds,
   onPickCategory,
+  onEditCategory,
+  onEditGroup,
   onAddCategory,
 }: {
   group: CategoryGroupDoc;
@@ -257,6 +296,8 @@ function GroupSection({
   currency: string;
   onBudgetIds: Set<string>;
   onPickCategory: (c: CategoryDoc) => void;
+  onEditCategory: (c: CategoryDoc) => void;
+  onEditGroup: (g: CategoryGroupDoc) => void;
   onAddCategory: () => void;
 }) {
   // Group header total = sum of THIS MONTH assignments across the group's
@@ -268,10 +309,15 @@ function GroupSection({
 
   return (
     <section className="overflow-hidden rounded-2xl bg-white/5 ring-1 ring-white/10">
-      <header className="flex items-center justify-between gap-3 border-b border-white/5 px-4 py-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-white/60">
-          {group.name}
-        </div>
+      <header className="flex items-center justify-between gap-2 border-b border-white/5 px-4 py-2">
+        <button
+          type="button"
+          onClick={() => onEditGroup(group)}
+          className="flex flex-1 items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-white/60 hover:text-white"
+        >
+          <span>{group.name}</span>
+          <span className="text-white/30 text-[10px]">⋯</span>
+        </button>
         <div className="text-xs text-white/40 tabular-nums">
           {formatCents(groupAssigned, currency)}
         </div>
@@ -306,6 +352,7 @@ function GroupSection({
                   available={available}
                   currency={currency}
                   onPick={() => onPickCategory(c)}
+                  onEdit={() => onEditCategory(c)}
                 />
               </li>
             );
@@ -332,6 +379,7 @@ function CategoryRow({
   available,
   currency,
   onPick,
+  onEdit,
 }: {
   category: CategoryDoc;
   assigned: Cents;
@@ -339,22 +387,25 @@ function CategoryRow({
   available: Cents;
   currency: string;
   onPick: () => void;
+  onEdit: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onPick}
-      className="grid w-full grid-cols-[1fr_auto] items-center gap-2 px-4 py-3 text-left hover:bg-white/[0.03]"
-    >
-      <div className="min-w-0">
+    <div className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-2 px-4 py-3">
+      <button
+        type="button"
+        onClick={onPick}
+        className="min-w-0 text-left hover:opacity-80"
+      >
         <div className="truncate text-sm font-medium">{category.name}</div>
         <div className="mt-0.5 text-[11px] text-white/40 tabular-nums">
           Assigned {formatCents(assigned, currency)} · Activity {formatCents(activity, currency)}
         </div>
-      </div>
-      <div
+      </button>
+      <button
+        type="button"
+        onClick={onPick}
         className={[
-          "rounded-lg px-2.5 py-1 text-sm font-semibold tabular-nums",
+          "rounded-lg px-2.5 py-1 text-sm font-semibold tabular-nums hover:opacity-80",
           available > 0
             ? "bg-emerald-500/15 text-emerald-300"
             : available < 0
@@ -363,8 +414,20 @@ function CategoryRow({
         ].join(" ")}
       >
         {formatCents(available, currency)}
-      </div>
-    </button>
+      </button>
+      <button
+        type="button"
+        onClick={onEdit}
+        aria-label={`Edit ${category.name}`}
+        className="rounded-full p-1 text-white/30 hover:bg-white/10 hover:text-white"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="5" cy="12" r="1.5" />
+          <circle cx="12" cy="12" r="1.5" />
+          <circle cx="19" cy="12" r="1.5" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
