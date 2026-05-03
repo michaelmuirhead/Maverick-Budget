@@ -215,7 +215,72 @@ function useConnectionStatus() {
   return online;
 }
 
-const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {}, nwItems: [] };
+const EMPTY_DATA = { nodes: [], entries: [], recurrings: [], customCategories: [], savingsGoals: [], bankAccount: {}, bankAccounts: {}, nwItems: [], budgetMonths: {} };
+
+// ── YNAB-style budget math ───────────────────────────────────────────────
+// budgetMonths shape: { "YYYY-MM": { [categoryNodeId]: { assigned: number } } }
+// Available is derived (rolling carryover from earliest activity through the displayed month).
+// Ready to Assign is derived (all-time income − all-time assignments).
+
+function getCategoryDescendantIds(nodes, nodeId) {
+  const out = [nodeId];
+  const stack = [nodeId];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const n of nodes) if (n.parentId === cur) { out.push(n.id); stack.push(n.id); }
+  }
+  return out;
+}
+
+// Sum of paid expenses on a category (and all descendants) in a single YYYY-MM window
+function getCategoryActivity(nodes, entries, nodeId, monthKey) {
+  const ids = new Set(getCategoryDescendantIds(nodes, nodeId));
+  let sum = 0;
+  for (const e of entries) {
+    if (e.type !== "expense") continue;
+    if (e.paid === false) continue;
+    if (!ids.has(e.nodeId)) continue;
+    if (!(e.dateISO || "").startsWith(monthKey)) continue;
+    sum += (e.amount || 0);
+  }
+  return sum;
+}
+
+// Rolling Available: Σ over months ≤ monthKey of (assigned − activity)
+function getCategoryAvailable(nodes, entries, budgetMonths, nodeId, monthKey) {
+  const ids = new Set(getCategoryDescendantIds(nodes, nodeId));
+  // Collect every month with either an assignment or paid-expense activity for this category up to monthKey
+  const months = new Set();
+  for (const m of Object.keys(budgetMonths || {})) {
+    if (m <= monthKey && (budgetMonths[m]?.[nodeId]?.assigned)) months.add(m);
+  }
+  for (const e of entries) {
+    if (e.type !== "expense") continue;
+    if (e.paid === false) continue;
+    if (!ids.has(e.nodeId)) continue;
+    const m = (e.dateISO || "").slice(0, 7);
+    if (!m || m > monthKey) continue;
+    months.add(m);
+  }
+  let total = 0;
+  for (const m of months) {
+    const assigned = budgetMonths?.[m]?.[nodeId]?.assigned || 0;
+    total += assigned - getCategoryActivity(nodes, entries, nodeId, m);
+  }
+  return total;
+}
+
+// All-time income − all-time assignments across every category, every month.
+// Income entries always feed Ready to Assign regardless of which folder they're filed under.
+function getReadyToAssign(entries, budgetMonths) {
+  let income = 0;
+  for (const e of entries) if (e.type === "income") income += (e.amount || 0);
+  let assigned = 0;
+  for (const monthMap of Object.values(budgetMonths || {})) {
+    for (const c of Object.values(monthMap || {})) assigned += (c?.assigned || 0);
+  }
+  return income - assigned;
+}
 
 function useApp(user, householdId) {
   const [d, setD] = useState(EMPTY_DATA);
@@ -233,7 +298,7 @@ function useApp(user, householdId) {
       if (skipNextRemote.current) { skipNextRemote.current = false; return; }
       if (snap.exists()) {
         const r = snap.data();
-        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], customCategories: r.customCategories||[], savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{}, nwItems: r.nwItems||[] }));
+        setD(processRecurrings({ nodes: r.nodes||[], entries: r.entries||[], recurrings: r.recurrings||[], customCategories: r.customCategories||[], savingsGoals: r.savingsGoals||[], bankAccount: r.bankAccount||{}, bankAccounts: r.bankAccounts||{}, nwItems: r.nwItems||[], budgetMonths: r.budgetMonths||{} }));
       }
       setSynced(true);
     }, () => { try { const r = localStorage.getItem("maverick-budget-data"); if (r) setD(processRecurrings(JSON.parse(r))); } catch {} setSynced(true); });
@@ -307,6 +372,35 @@ function useApp(user, householdId) {
       const fresh = items.filter(i => !existingIds.has(i.id));
       if (fresh.length === 0) return p;
       return { ...p, nwItems: [...(p.nwItems||[]), ...fresh] };
+    }), []),
+    // Budget assignment for a given month + category. Pass amount=0 (or null) to clear.
+    setAssigned: useCallback((month, nodeId, amount) => up(p => {
+      const months = { ...(p.budgetMonths || {}) };
+      const monthMap = { ...(months[month] || {}) };
+      const num = Number(amount) || 0;
+      if (num === 0) delete monthMap[nodeId];
+      else monthMap[nodeId] = { assigned: num };
+      if (Object.keys(monthMap).length === 0) delete months[month];
+      else months[month] = monthMap;
+      return { ...p, budgetMonths: months };
+    }), []),
+    // Quality-of-life: copy each category's assigned amount from one month to another.
+    // Doesn't overwrite existing assignments in the destination month.
+    copyAssignmentsFromMonth: useCallback((srcMonth, dstMonth) => up(p => {
+      const src = (p.budgetMonths || {})[srcMonth];
+      if (!src) return p;
+      const months = { ...(p.budgetMonths || {}) };
+      const dst = { ...(months[dstMonth] || {}) };
+      let changed = false;
+      for (const nid of Object.keys(src)) {
+        if (dst[nid] == null && src[nid]?.assigned) {
+          dst[nid] = { assigned: src[nid].assigned };
+          changed = true;
+        }
+      }
+      if (!changed) return p;
+      months[dstMonth] = dst;
+      return { ...p, budgetMonths: months };
     }), []),
     setBankAccount: useCallback((nodeId, data) => up(p => ({ ...p, bankAccount: { ...(p.bankAccount||{}), [nodeId]: data } })), []),
     removeBankAccount: useCallback(nodeId => up(p => { const ba = { ...(p.bankAccount||{}) }; delete ba[nodeId]; return { ...p, bankAccount: ba }; }), []),
@@ -1685,6 +1779,11 @@ export default function App({ user, householdId }) {
   const [billCalMonth, setBillCalMonth] = useState(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
   const [billCalSelectedDay, setBillCalSelectedDay] = useState(null); // ISO date string
   const [globalSearch, setGlobalSearch] = useState("");
+  // YNAB-style budget dashboard
+  const [budgetMonth, setBudgetMonth] = useState(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
+  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
+  const [editingAssigned, setEditingAssigned] = useState(null); // categoryNodeId currently being edited
+  const [assignedDraft, setAssignedDraft] = useState("");
   const [advisorMessages, setAdvisorMessages] = useState(() => { try { const s = localStorage.getItem("maverick-advisor-msgs"); return s ? JSON.parse(s) : []; } catch { return []; } });
   const [advisorInput, setAdvisorInput] = useState("");
   const [advisorLoading, setAdvisorLoading] = useState(false);
@@ -3229,7 +3328,7 @@ ${context}`;
       }}>
         {[
           { id: "home", icon: "🏠", label: "Home" },
-          { id: "budgets", icon: "📂", label: "Budgets" },
+          { id: "budgets", icon: "📂", label: "Categories" },
           { id: "charts", icon: "📈", label: "Charts" },
           { id: "accounts", icon: "🏦", label: "Accounts" },
           { id: "settings", icon: "⚙️", label: "Settings" },
@@ -3448,76 +3547,195 @@ ${context}`;
         {/* Dashboard sections — hidden while search is active */}
         {globalSearch.trim() ? null : (
         <>
-        {/* 2x2 Hero Grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
-          {/* Budgets */}
-          <div onClick={() => { setActiveTab("budgets"); haptic(); }} style={{ background: "linear-gradient(135deg, #172554, #1e3a5f)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
-            onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(96,165,250,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📊</div>
-            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(191,219,254,0.7)" }}>Budgets</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#bfdbfe", marginTop: 2 }}>{allRoots.filter(n => !n.archived).length} Folders</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#93c5fd", fontFamily: t.mono, marginTop: 4 }}>{fmt(totalBalance)}</div></div>
-            <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#bfdbfe" }}>›</span>
-          </div>
+        {/* ── YNAB-style Budget Dashboard ───────────────────────── */}
+        {(() => {
+          // Parse current budget month (YYYY-MM) into nav handles
+          const [yStr, mStr] = budgetMonth.split("-");
+          const yearN = parseInt(yStr, 10);
+          const monthN = parseInt(mStr, 10) - 1;
+          const monthDate = new Date(yearN, monthN, 1);
+          const monthLabel = monthDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+          const prev = new Date(yearN, monthN - 1, 1);
+          const next = new Date(yearN, monthN + 1, 1);
+          const prevKey = `${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,"0")}`;
+          const nextKey = `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}`;
+          const prevLabel = prev.toLocaleDateString("en-US", { month: "short" });
+          const nextLabel = next.toLocaleDateString("en-US", { month: "short" });
 
-          {/* Net Worth */}
-          <div onClick={() => { setShowNetWorth(true); haptic(); }} style={{ background: "linear-gradient(135deg, #1c1917, #44403c)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
-            onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(168,162,158,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>💎</div>
-            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(214,211,209,0.7)" }}>Net Worth</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#d6d3d1", marginTop: 2 }}>Track Assets</div></div>
-            <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#d6d3d1" }}>›</span>
-          </div>
+          const groups = allRoots.filter(n => !n.archived);
+          const budgetMonthsObj = d.budgetMonths || {};
+          const monthMap = budgetMonthsObj[budgetMonth] || {};
+          const readyToAssign = getReadyToAssign(d.entries || [], budgetMonthsObj);
+          const rtaPositive = readyToAssign >= 0;
 
-          {/* Bill Calendar */}
-          {(() => {
-            const now = new Date();
-            const todayISOStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-            const weekISOStr = (() => { const w = new Date(now.getTime() + 7*86400000); return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,"0")}-${String(w.getDate()).padStart(2,"0")}`; })();
-            const upcoming = (d.entries || []).filter(e => e.type === "expense" && e.paid === false && e.dateISO && e.dateISO >= todayISOStr && e.dateISO <= weekISOStr);
-            const upcomingTotal = upcoming.reduce((s, e) => s + (e.amount || 0), 0);
+          const hasAnyAssignmentInThisMonth = Object.keys(monthMap).length > 0;
+          const hasAnyAssignmentInPrevMonth = Object.keys(budgetMonthsObj[prevKey] || {}).length > 0;
+
+          const commitAssigned = (categoryId) => {
+            const num = parseFloat(assignedDraft);
+            const cleanNum = isNaN(num) ? 0 : Math.max(0, num);
+            app.setAssigned(budgetMonth, categoryId, cleanNum);
+            setEditingAssigned(null);
+            setAssignedDraft("");
+            haptic();
+          };
+
+          if (groups.length === 0) {
             return (
-              <div onClick={() => { setShowBillCalendar(true); haptic(); }} style={{ background: "linear-gradient(135deg, #1e1b4b, #312e81)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
-                onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
-                <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(129,140,248,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📅</div>
-                <div>
-                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(199,210,254,0.7)" }}>Bills</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#c7d2fe", marginTop: 2 }}>{upcoming.length === 0 ? "All clear" : `${upcoming.length} due`}</div>
-                  {upcoming.length > 0 && <div style={{ fontSize: 12, fontWeight: 600, color: "#a5b4fc", fontFamily: t.mono, marginTop: 4 }}>{fmt(upcomingTotal)}</div>}
-                  {upcoming.length === 0 && <div style={{ fontSize: 10, color: "rgba(199,210,254,0.5)", marginTop: 4 }}>This week</div>}
-                </div>
-                <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#c7d2fe" }}>›</span>
+              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14, padding: "32px 20px", textAlign: "center", marginBottom: 16 }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📊</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 4 }}>No category groups yet</div>
+                <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 14 }}>Create your first group (e.g. "Immediate Obligations") in Budgets.</div>
+                <button onClick={() => { setActiveTab("budgets"); setTimeout(() => setAddingRoot(true), 200); haptic(); }} style={{ padding: "10px 18px", borderRadius: 8, border: "none", background: t.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Set up budget</button>
               </div>
             );
-          })()}
+          }
 
-          {/* AI Advisor */}
-          <div onClick={() => { setShowAdvisor(true); haptic(); }} style={{ background: "linear-gradient(135deg, #042f2e, #065f46)", borderRadius: 16, padding: 14, cursor: "pointer", minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between", transition: "transform 0.15s", position: "relative" }}
-            onMouseDown={e => e.currentTarget.style.transform = "scale(0.97)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(52,211,153,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🤖</div>
-            <div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, color: "rgba(167,243,208,0.7)" }}>AI Advisor</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#a7f3d0", marginTop: 2 }}>Ask Anything</div>
-            <div style={{ display: "flex", gap: 3, marginTop: 6 }}>{[0,1,2].map(i => <div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: "#6ee7b7", opacity: 0.4, animation: `pulse 1.5s ease infinite ${i * 0.3}s` }} />)}</div></div>
-            <span style={{ position: "absolute", right: 12, top: 12, fontSize: 14, opacity: 0.4, color: "#a7f3d0" }}>›</span>
-          </div>
-        </div>
+          return (
+            <>
+              {/* Month picker */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <button onClick={() => { setBudgetMonth(prevKey); haptic(); }} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>‹ {prevLabel}</button>
+                <div style={{ fontSize: 16, fontWeight: 700, color: t.text }}>{monthLabel}</div>
+                <button onClick={() => { setBudgetMonth(nextKey); haptic(); }} style={{ background: t.surface, border: `1px solid ${t.cardBorder}`, color: t.textSub, borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>{nextLabel} ›</button>
+              </div>
 
-        {/* Quick Actions */}
-        <div style={{ background: "linear-gradient(135deg, #3b0764, #581c87)", borderRadius: 16, padding: "12px 16px", marginBottom: 20, display: "flex", justifyContent: "space-around", alignItems: "center" }}>
-          {[
-            { icon: "📂", label: "New Folder", action: () => { setActiveTab("budgets"); setTimeout(() => setAddingRoot(true), 200); } },
-            { icon: "📅", label: "Bills", action: () => setShowBillCalendar(true) },
-            { icon: "🤖", label: "AI Help", action: () => setShowAdvisor(true) },
-            { icon: "⚙", label: "Settings", action: () => setShowSettings(!showSettings) },
-          ].map(a => (
-            <button key={a.label} onClick={() => { a.action(); haptic(); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, background: "none", border: "none", color: "#e9d5ff", cursor: "pointer", fontSize: 10, fontWeight: 500, opacity: 0.9 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{a.icon}</div>
-              {a.label}
-            </button>
-          ))}
-        </div>
+              {/* Copy from previous month — only if this month is empty and previous month has assignments */}
+              {!hasAnyAssignmentInThisMonth && hasAnyAssignmentInPrevMonth && (
+                <button onClick={() => { app.copyAssignmentsFromMonth(prevKey, budgetMonth); haptic(); }} style={{ width: "100%", padding: "8px 0", borderRadius: 10, border: `1px dashed ${t.accent}40`, background: `${t.accent}08`, color: t.accentLight, fontSize: 11, fontWeight: 600, cursor: "pointer", marginBottom: 12 }}>
+                  ↻ Copy assignments from {prevLabel}
+                </button>
+              )}
 
-        {/* Proactive Insights */}
+              {/* Ready to Assign banner */}
+              <div style={{
+                background: rtaPositive ? `linear-gradient(135deg, ${t.inc}15, ${t.inc}30)` : `linear-gradient(135deg, ${t.exp}20, ${t.exp}35)`,
+                border: `1px solid ${rtaPositive ? t.inc : t.exp}40`,
+                borderRadius: 14, padding: "16px 18px", marginBottom: 16,
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+              }}>
+                <div>
+                  <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 4 }}>Ready to Assign</div>
+                  <div style={{ fontSize: 11, color: rtaPositive ? t.textSub : t.exp }}>{rtaPositive ? "Give every dollar a job" : "You've assigned more than you have"}</div>
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: rtaPositive ? t.inc : t.exp, fontFamily: t.mono }}>
+                  {rtaPositive ? "" : "-"}{fmt(Math.abs(readyToAssign))}
+                </div>
+              </div>
+
+              {/* Category groups */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+                {groups.map(group => {
+                  const categories = d.nodes.filter(n => n.parentId === group.id && !n.archived);
+                  const groupAssigned = categories.reduce((s, c) => s + (monthMap[c.id]?.assigned || 0), 0);
+                  const groupActivity = categories.reduce((s, c) => s + getCategoryActivity(d.nodes, d.entries, c.id, budgetMonth), 0);
+                  const groupAvailable = categories.reduce((s, c) => s + getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, c.id, budgetMonth), 0);
+                  const collapsed = collapsedGroups.has(group.id);
+                  const toggle = () => { const next = new Set(collapsedGroups); collapsed ? next.delete(group.id) : next.add(group.id); setCollapsedGroups(next); haptic(); };
+
+                  return (
+                    <div key={group.id} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
+                      {/* Group header */}
+                      <div onClick={toggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", cursor: "pointer", borderLeft: `3px solid ${group.color || t.accent}`, background: "rgba(255,255,255,0.02)" }}>
+                        <span style={{ fontSize: 11, color: t.textMuted, transition: "transform 0.15s", display: "inline-block", transform: collapsed ? "rotate(-90deg)" : "rotate(0)" }}>▾</span>
+                        <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: t.text, textTransform: "uppercase", letterSpacing: "0.06em" }}>{group.name}</div>
+                          <span style={{ fontSize: 10, color: t.textMuted }}>{categories.length}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: t.textSub, fontFamily: t.mono, display: "flex", gap: 12 }}>
+                          <span title="Assigned this month">{fmt(groupAssigned)}</span>
+                          <span title="Available" style={{ color: groupAvailable < 0 ? t.exp : t.inc, fontWeight: 600 }}>{fmt(groupAvailable)}</span>
+                        </div>
+                      </div>
+
+                      {/* Categories */}
+                      {!collapsed && (
+                        <div>
+                          {categories.length === 0 ? (
+                            <div style={{ padding: "12px 14px", fontSize: 11, color: t.textMuted, textAlign: "center" }}>No categories yet — add one in Budgets.</div>
+                          ) : categories.map(cat => {
+                            const assigned = monthMap[cat.id]?.assigned || 0;
+                            const activity = getCategoryActivity(d.nodes, d.entries, cat.id, budgetMonth);
+                            const available = getCategoryAvailable(d.nodes, d.entries, budgetMonthsObj, cat.id, budgetMonth);
+                            const overspent = available < 0;
+                            const fullyFunded = assigned > 0 && activity >= assigned && !overspent;
+                            const editing = editingAssigned === cat.id;
+                            const pct = assigned > 0 ? Math.min(100, (activity / assigned) * 100) : 0;
+
+                            return (
+                              <div key={cat.id} style={{ borderTop: `1px solid ${t.cardBorder}` }}>
+                                <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", gap: 10 }}>
+                                  {/* Name + tap-to-drill */}
+                                  <div onClick={() => { goTo(cat.id); haptic(); }} style={{ flex: 1, minWidth: 0, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+                                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: cat.color || t.accent, flexShrink: 0 }} />
+                                    <div style={{ minWidth: 0 }}>
+                                      <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat.name}</div>
+                                      {(activity > 0 || assigned > 0) && (
+                                        <div style={{ fontSize: 9, color: t.textMuted, fontFamily: t.mono, marginTop: 2 }}>
+                                          {fmt(activity)} of {fmt(assigned)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Assigned (editable) */}
+                                  <div style={{ width: 70, textAlign: "right" }}>
+                                    {editing ? (
+                                      <input
+                                        autoFocus
+                                        type="number"
+                                        inputMode="decimal"
+                                        step="0.01"
+                                        value={assignedDraft}
+                                        onChange={e => setAssignedDraft(e.target.value)}
+                                        onBlur={() => commitAssigned(cat.id)}
+                                        onKeyDown={e => {
+                                          if (e.key === "Enter") { e.target.blur(); }
+                                          else if (e.key === "Escape") { setEditingAssigned(null); setAssignedDraft(""); }
+                                        }}
+                                        style={{ width: "100%", boxSizing: "border-box", background: t.inputBg, border: `1px solid ${t.accent}60`, borderRadius: 6, padding: "4px 6px", color: t.text, fontSize: 13, fontFamily: t.mono, textAlign: "right", outline: "none" }}
+                                      />
+                                    ) : (
+                                      <button onClick={() => { setEditingAssigned(cat.id); setAssignedDraft(assigned ? String(assigned) : ""); haptic(); }} style={{ background: assigned > 0 ? "rgba(255,255,255,0.04)" : "transparent", border: `1px dashed ${assigned > 0 ? "transparent" : t.cardBorder}`, borderRadius: 6, padding: "4px 6px", color: assigned > 0 ? t.text : t.textMuted, fontSize: 13, fontFamily: t.mono, cursor: "pointer", width: "100%", textAlign: "right" }}>
+                                        {assigned > 0 ? fmt(assigned) : "—"}
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {/* Available */}
+                                  <div style={{ width: 80, textAlign: "right" }}>
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: overspent ? t.exp : fullyFunded ? t.textMuted : t.inc, fontFamily: t.mono }}>
+                                      {overspent ? "-" : ""}{fmt(Math.abs(available))}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Progress bar (when assigned > 0) */}
+                                {assigned > 0 && (
+                                  <div style={{ height: 2, background: "rgba(255,255,255,0.04)", marginLeft: 30, marginRight: 14, marginBottom: 8 }}>
+                                    <div style={{ height: "100%", width: `${pct}%`, background: overspent ? t.exp : pct >= 100 ? t.textMuted : cat.color || t.accent, transition: "width 0.4s ease" }} />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Column legend (small, fixed reminder) */}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, padding: "0 4px", marginBottom: 14, fontSize: 9, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+                <span style={{ width: 70, textAlign: "right" }}>Assigned</span>
+                <span style={{ width: 80, textAlign: "right" }}>Available</span>
+              </div>
+            </>
+          );
+        })()}
+
+        {/* Insights — kept (pairs well with budget view) */}
         {(() => {
           const insights = generateInsights();
           if (insights.length === 0) return null;
@@ -3544,49 +3762,21 @@ ${context}`;
           );
         })()}
 
-        {/* Around This Time — transactions within ±7 days of today */}
-        {recentEntries.length > 0 && (
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 10, color: t.textMuted, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, marginBottom: 8, paddingLeft: 2, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span>Around This Time</span>
-              <span style={{ fontWeight: 400, letterSpacing: "0.04em", textTransform: "none", color: t.textDim }}>
-                {(() => {
-                  const start = new Date(todayMs - windowMs);
-                  const end = new Date(todayMs + windowMs);
-                  const fmtMD = dt => dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                  return `${fmtMD(start)} – ${fmtMD(end)}`;
-                })()}
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {recentEntries.map(entry => (
-                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 10, transition: "background 0.15s" }}
-                  onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
-                  onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 10,
-                    background: entry.cat ? `${entry.cat.color}20` : "rgba(255,255,255,0.05)",
-                    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16,
-                  }}>
-                    {entry.cat ? entry.cat.icon : "📋"}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label || "Untitled"}</div>
-                    <div style={{ fontSize: 10, color: t.textMuted, marginTop: 1 }}>
-                      {entry.cat ? entry.cat.label : "Other"}{entry.folder ? ` · ${entry.folder.name}` : ""}{entry.dateISO ? ` · ${fmtDate(entry.dateISO)}` : ""}
-                    </div>
-                  </div>
-                  <div style={{
-                    fontSize: 14, fontWeight: 600, flexShrink: 0,
-                    color: entry.type === "income" ? t.inc : t.exp,
-                  }}>
-                    {entry.type === "income" ? "+" : "-"}{fmt(Math.abs(entry.amount || 0))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Compact tile strip — Bills, Net Worth, AI Advisor, Charts */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 20 }}>
+          {[
+            { icon: "📅", label: "Bills", color: "#a5b4fc", bg: "linear-gradient(135deg, #1e1b4b, #312e81)", action: () => setShowBillCalendar(true) },
+            { icon: "💎", label: "Net Worth", color: "#d6d3d1", bg: "linear-gradient(135deg, #1c1917, #44403c)", action: () => setShowNetWorth(true) },
+            { icon: "🤖", label: "AI Advisor", color: "#a7f3d0", bg: "linear-gradient(135deg, #042f2e, #065f46)", action: () => setShowAdvisor(true) },
+            { icon: "📈", label: "Charts", color: "#f0abfc", bg: "linear-gradient(135deg, #3b0764, #581c87)", action: () => setActiveTab("charts") },
+          ].map(tile => (
+            <button key={tile.label} onClick={() => { tile.action(); haptic(); }} style={{ background: tile.bg, border: "none", borderRadius: 12, padding: "12px 6px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, color: tile.color, transition: "transform 0.15s" }}
+              onMouseDown={e => e.currentTarget.style.transform = "scale(0.95)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"} onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+              <span style={{ fontSize: 20 }}>{tile.icon}</span>
+              <span style={{ fontSize: 10, fontWeight: 600 }}>{tile.label}</span>
+            </button>
+          ))}
+        </div>
         </>
         )}
 
