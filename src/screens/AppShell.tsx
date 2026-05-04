@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import type { Session } from "@/lib/session";
+import { QuickAddTransactionSheet } from "./QuickAddTransactionSheet";
 
 interface Tab {
   to: string;
@@ -21,11 +22,35 @@ interface Props {
 
 export function AppShell({ session }: Props) {
   const { pathname } = useLocation();
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+
   return (
     <div className="flex min-h-[100dvh] flex-col bg-ink-950">
       <main className="flex-1 overflow-y-auto pb-24 safe-x">
         <Outlet context={session} />
       </main>
+
+      {/* Floating action button — quick-add a transaction from anywhere. */}
+      <button
+        type="button"
+        onClick={() => setQuickAddOpen(true)}
+        aria-label="Quick add transaction"
+        className="fixed right-4 z-40 flex size-14 items-center justify-center rounded-full bg-brand-500 text-white shadow-lg shadow-brand-500/40 transition-colors hover:bg-brand-400 active:bg-brand-600"
+        style={{ bottom: "calc(80px + env(safe-area-inset-bottom))" }}
+      >
+        <svg
+          width="26"
+          height="26"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          aria-hidden="true"
+        >
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
 
       <nav
         className="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-ink-950/90 backdrop-blur-md safe-bottom"
@@ -51,6 +76,11 @@ export function AppShell({ session }: Props) {
           })}
         </ul>
       </nav>
+
+      <QuickAddTransactionSheet
+        open={quickAddOpen}
+        onClose={() => setQuickAddOpen(false)}
+      />
     </div>
   );
 }

@@ -77,6 +77,20 @@ export interface FcmTokenDoc {
 
 // ── Households ──────────────────────────────────────────────────────────────
 
+/** Where the currency symbol sits relative to the amount — e.g. "$1.23" vs "1.23$". */
+export type CurrencyPlacement = "before" | "after";
+
+/**
+ * Number format presets. Drives thousands and decimal separators.
+ *   "1,234.56"  — US/UK
+ *   "1.234,56"  — most of Europe
+ *   "1,23,456.78" — Indian system
+ */
+export type NumberFormat = "1,234.56" | "1.234,56" | "1,23,456.78";
+
+/** Date format preset — drives display only; underlying storage stays YYYY-MM-DD. */
+export type DateFormat = "MM/DD/YYYY" | "DD/MM/YYYY" | "YYYY-MM-DD";
+
 export interface HouseholdDoc {
   id: string;
   name: string;
@@ -88,6 +102,12 @@ export interface HouseholdDoc {
   memberUids: string[];
   /** ISO 4217 currency code, e.g. "USD". */
   currency: string;
+  /** Where the currency symbol appears. Defaults to "before". */
+  currencyPlacement: CurrencyPlacement;
+  /** Thousands/decimal separator preset. Defaults to "1,234.56". */
+  numberFormat: NumberFormat;
+  /** Date display preset. Defaults to "MM/DD/YYYY". */
+  dateFormat: DateFormat;
   /** IANA timezone, e.g. "America/Chicago". Used to compute month boundaries. */
   timezone: string;
   /** First day of the budget week (0 = Sunday … 6 = Saturday). YNAB defaults to Monday. */

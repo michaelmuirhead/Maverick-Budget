@@ -5,12 +5,14 @@ import { signOutCurrentUser } from "@/lib/auth";
 import { PlaceholderScreen } from "./PlaceholderScreen";
 import { useSession } from "@/lib/session";
 import { recomputeHousehold } from "@/lib/recompute";
+import { HouseholdSwitcher } from "@/components/HouseholdSwitcher";
 
 export function SettingsScreen() {
   const { user, household } = useSession();
   const [copied, setCopied] = useState(false);
   const [recomputing, setRecomputing] = useState(false);
   const [recomputeMsg, setRecomputeMsg] = useState<string | null>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   async function copyCode() {
     try {
@@ -59,6 +61,23 @@ export function SettingsScreen() {
         </p>
       </Section>
 
+      <Section title="Plan">
+        <button
+          type="button"
+          onClick={() => setSwitcherOpen(true)}
+          className="flex items-center justify-between gap-3 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 hover:bg-white/10 text-left"
+        >
+          <div className="flex flex-col">
+            <div className="text-xs uppercase tracking-wide text-white/40">Active plan</div>
+            <div className="text-sm font-medium text-white">{household.name}</div>
+            <div className="text-[11px] text-white/40">
+              {household.currency} · {household.dateFormat ?? "MM/DD/YYYY"} · {household.numberFormat ?? "1,234.56"}
+            </div>
+          </div>
+          <span className="text-sm text-brand-300">Switch ›</span>
+        </button>
+      </Section>
+
       <Section title="Tools">
         <Link
           to="/scheduled"
@@ -102,6 +121,13 @@ export function SettingsScreen() {
           Sign out
         </Button>
       </Section>
+
+      <HouseholdSwitcher
+        open={switcherOpen}
+        onClose={() => setSwitcherOpen(false)}
+        user={user}
+        activeHouseholdId={household.id}
+      />
     </PlaceholderScreen>
   );
 }
